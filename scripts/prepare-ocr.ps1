@@ -27,23 +27,22 @@ $modelRoot = Join-Path ([System.IO.Path]::GetTempPath()) "heaspot-ocr-models"
 try {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
-    $runtimeSource = Join-Path $env:ProgramFiles "Tesseract-OCR"
-    if (-not (Test-Path (Join-Path $runtimeSource "tesseract.exe"))) {
-        New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-        Invoke-WebRequest -Uri $installerUrl -OutFile $temp -UseBasicParsing
-        if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -ne $installerSha256) {
-            throw "Tesseract installer checksum mismatch"
-        }
+    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+    Invoke-WebRequest -Uri $installerUrl -OutFile $temp -UseBasicParsing
+    if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -ne $installerSha256) {
+        throw "Tesseract installer checksum mismatch"
+    }
 
-        $process = Start-Process -FilePath $temp -ArgumentList "/S /D=$installRoot" -Wait -PassThru
-        if ($process.ExitCode -ne 0) {
-            throw "Tesseract installer failed with exit code $($process.ExitCode)"
-        }
-        $runtimeSource = $installRoot
+    # Giải nén NSIS thay vì chạy installer: không cần UAC, không chạm registry và
+    # hoạt động giống nhau trên máy dev lẫn GitHub Actions runner sạch.
+    $sevenZip = (Get-Command "7z.exe" -ErrorAction Stop).Source
+    & $sevenZip x -y "-o$installRoot" $temp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not extract the verified Tesseract installer"
     }
-    if (-not (Test-Path (Join-Path $runtimeSource "tesseract.exe"))) {
-        throw "Tesseract runtime was not produced by the verified installer"
-    }
+    $runtimeExe = Get-ChildItem -LiteralPath $installRoot -Filter "tesseract.exe" -File -Recurse | Select-Object -First 1
+    if ($null -eq $runtimeExe) { throw "Tesseract runtime was not found after extraction" }
+    $runtimeSource = $runtimeExe.Directory.FullName
 
     # Chỉ đóng gói CLI runtime; bỏ tool huấn luyện, tài liệu và uninstaller.
     Get-ChildItem -LiteralPath $target -File -ErrorAction SilentlyContinue | Remove-Item -Force
