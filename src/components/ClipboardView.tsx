@@ -13,6 +13,8 @@ interface Props {
   /** Dán item đang chọn vào cửa sổ trước đó (plain = văn bản thuần) */
   onPaste: (plain: boolean) => void;
   onTogglePin: () => void;
+  onTogglePinItem: (item: ClipItem) => void;
+  onDeleteItem: (item: ClipItem) => void;
   onFocusInput: () => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   /** Form "Lưu thành Snippet" (Ctrl+S) */
@@ -42,6 +44,8 @@ export function ClipboardView({
   onSelect,
   onPaste,
   onTogglePin,
+  onTogglePinItem,
+  onDeleteItem,
   onFocusInput,
   textareaRef,
   snipOpen,
@@ -112,7 +116,7 @@ export function ClipboardView({
             key={c.id}
             onClick={() => onSelect(i)}
             onDoubleClick={() => onPaste(false)}
-            className={`flex items-center gap-2 mx-2 px-2.5 py-1.5 rounded-lg cursor-default transition-colors duration-75
+            className={`group flex items-center gap-2 mx-2 px-2.5 py-1.5 rounded-lg cursor-default transition-colors duration-75
               ${
                 i === selectedIndex
                   ? "bg-blue-600 text-white"
@@ -147,16 +151,34 @@ export function ClipboardView({
                 {c.created_at}
               </div>
             </div>
-            {c.pinned && (
-              <span
-                title="Đã ghim"
-                className={`flex items-center justify-center w-5 h-5 rounded ${i === selectedIndex ? "text-amber-200 bg-white/10" : "text-amber-600 bg-amber-500/10"}`}
+            <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                title={c.pinned ? "Bỏ ghim" : "Ghim lên đầu"}
+                aria-label={c.pinned ? "Bỏ ghim" : "Ghim"}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => { e.stopPropagation(); onTogglePinItem(c); }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={`flex items-center justify-center w-6 h-6 rounded hover:bg-black/10 dark:hover:bg-white/10 ${c.pinned ? (i === selectedIndex ? "text-amber-200" : "text-amber-600") : (i === selectedIndex ? "text-blue-100" : "text-zinc-400")}`}
               >
                 <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
                   <path d="M16 3a1 1 0 0 1 .8 1.6L15.2 7H17a1 1 0 0 1 .8 1.6L15 12.33V16l1.7 1.7a1 1 0 0 1-.7 1.7h-3v2.1a1 1 0 1 1-2 0v-2.1H8a1 1 0 0 1-.7-1.7L9 16v-3.67L6.2 8.6A1 1 0 0 1 7 7h1.8L7.2 4.6A1 1 0 0 1 8 3h8Z" />
                 </svg>
-              </span>
-            )}
+              </button>
+              <button
+                type="button"
+                title="Xóa khỏi lịch sử"
+                aria-label="Xóa"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => { e.stopPropagation(); onDeleteItem(c); }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={`flex items-center justify-center w-6 h-6 rounded hover:bg-red-500/15 ${i === selectedIndex ? "text-blue-100 hover:text-red-200" : "text-zinc-400 hover:text-red-500"}`}
+              >
+                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-none stroke-current" strokeWidth="2" aria-hidden="true">
+                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 10v7M14 10v7" />
+                </svg>
+              </button>
+            </div>
             {i < 9 && (
               <span
                 className={`text-[10px] tabular-nums shrink-0 ${

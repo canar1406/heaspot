@@ -29,6 +29,7 @@ const ICON_BG: Partial<Record<ResultItemData["kind"], string>> = {
   workflow: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400",
   "wf-cmd": "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400",
   process: "bg-red-500/15 text-red-600 dark:text-red-400",
+  "process-group": "bg-red-500/15 text-red-600 dark:text-red-400",
   password: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
 };
 
@@ -46,6 +47,7 @@ export function ResultItem({ item, selected, shortcut, onClick, onHover }: Props
       onClick={onClick}
       onMouseMove={onHover}
       className={`flex items-center gap-3 mx-2 px-3 py-2 rounded-lg cursor-default transition-colors duration-75
+        ${item.isChild ? "ml-8 border-l border-zinc-300/50 dark:border-zinc-600/50" : ""}
         ${
           selected
             ? "bg-blue-600 text-white"
@@ -87,6 +89,9 @@ export function ResultItem({ item, selected, shortcut, onClick, onHover }: Props
         >
           {shortcut}
         </span>
+      )}
+      {item.kind === "process-group" && (
+        <span className={`text-[12px] transition-transform ${item.expanded ? "rotate-90" : ""}`}>›</span>
       )}
     </div>
   );

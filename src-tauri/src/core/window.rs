@@ -1,14 +1,16 @@
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 /// Cửa sổ đang focus TRƯỚC khi WinSpot hiện — dùng cho auto-paste (Ctrl+V)
 static PREV_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
+static RESIZE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn prev_foreground() -> isize {
     PREV_FOREGROUND.load(Ordering::Relaxed)
 }
 
-const WINDOW_WIDTH: f64 = 680.0;
+// Giữ cùng chiều rộng cho search/detail để WebView không giật ngang khi đổi chế độ.
+const WINDOW_WIDTH: f64 = 900.0;
 const CLIPBOARD_WIDTH: f64 = 900.0;
 const CLIPBOARD_HEIGHT: f64 = 520.0;
 const BAR_HEIGHT: f64 = 72.0;
@@ -127,8 +129,24 @@ pub fn resize_window(app: AppHandle, height: f64, width: Option<f64>) {
     if let Some(win) = app.get_webview_window("main") {
         let w = width.unwrap_or(WINDOW_WIDTH).clamp(400.0, 1100.0);
         let h = height.clamp(BAR_HEIGHT, 640.0);
-        let _ = win.set_size(tauri::LogicalSize::new(w, h));
-        recenter_x(&win, w);
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let current = win.outer_size().ok();
+        let start_w = current.as_ref().map(|s| s.width as f64 / scale).unwrap_or(w);
+        let start_h = current.as_ref().map(|s| s.height as f64 / scale).unwrap_or(h);
+        let generation = RESIZE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+        std::thread::spawn(move || {
+            const STEPS: u32 = 10;
+            for step in 1..=STEPS {
+                if RESIZE_GENERATION.load(Ordering::Relaxed) != generation { return; }
+                let t = step as f64 / STEPS as f64;
+                let eased = 1.0 - (1.0 - t).powi(3);
+                let nw = start_w + (w - start_w) * eased;
+                let nh = start_h + (h - start_h) * eased;
+                let _ = win.set_size(tauri::LogicalSize::new(nw, nh));
+                recenter_x(&win, nw);
+                std::thread::sleep(std::time::Duration::from_millis(14));
+            }
+        });
     }
 }
 

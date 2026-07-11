@@ -184,6 +184,10 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
     // ── Word triggers ────────────────────────────────────────────────
     const wikiArg = matchWord(q, kw.wiki);
     if (wikiArg) {
+      setResults([{
+        id: "knowledge:loading", title: "Đang tra Wikipedia…", subtitle: wikiArg,
+        kind: "knowledge", text: "", preview: `Đang tải khái niệm “${wikiArg}”…`, action: "loading",
+      }]);
       const t = setTimeout(async () => {
         try {
           const hits = await invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg });
@@ -199,6 +203,10 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
 
     const trArg = matchWord(q, kw.translate);
     if (trArg) {
+      setResults([{
+        id: "translate:loading", title: "Đang dịch và tra từ điển…", subtitle: trArg,
+        kind: "knowledge", text: "", preview: `Đang nhận diện ngôn ngữ và tìm thông tin cho “${trArg}”…`, action: "translate",
+      }]);
       const t = setTimeout(async () => {
         try {
           const hit = await invoke<TranslationHit>("translate_lookup", { query: trArg });
@@ -233,6 +241,10 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
     const reviewArg = matchWord(q, kw.review);
     if (reviewArg !== null) {
       const filter = reviewArg || null;
+      setResults([{
+        id: "review:loading", title: "Đang mở danh sách ôn tập…",
+        kind: "knowledge", text: "", preview: "Đang tải các từ đã lưu…", action: "loading",
+      }]);
       const t = setTimeout(async () => {
         try {
           const words = await invoke<StudyWord[]>("get_study_words", { filter });
@@ -414,15 +426,23 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
       const t = setTimeout(async () => {
         try {
           const list = await invoke<ProcInfo[]>("list_processes", { query: psArg });
-          fresh(() => setResults(list.map((p) => ({
-            id: `proc:${p.pid}`,
-            title: p.name,
-            subtitle: `PID ${p.pid} · ${p.mem_mb.toFixed(1)} MB — → để Kill`,
-            kind: "process" as const,
-            pid: p.pid,
-            path: p.exe || undefined,
-            icon: p.icon ?? undefined,
-          }))));
+          const groups = new Map<string, ProcInfo[]>();
+          for (const proc of list) {
+            const key = proc.name.toLowerCase();
+            groups.set(key, [...(groups.get(key) || []), proc]);
+          }
+          const grouped = [...groups.entries()]
+            .map(([key, processes]) => ({ key, processes, total: processes.reduce((sum, p) => sum + p.mem_mb, 0) }))
+            .sort((a, b) => b.total - a.total)
+            .map(({ key, processes, total }) => ({
+              id: `proc-group:${key}`,
+              title: processes[0].name,
+              subtitle: `${processes.length} tiến trình · ${total.toFixed(1)} MB — Enter/→ để bung`,
+              kind: "process-group" as const,
+              icon: processes[0].icon ?? undefined,
+              processes,
+            }));
+          fresh(() => setResults(grouped));
         } catch { fresh(() => setResults([])); }
       }, 120);
       return () => clearTimeout(t);

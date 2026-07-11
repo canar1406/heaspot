@@ -59,7 +59,7 @@ pub fn list_processes(query: String) -> Vec<ProcInfo> {
     }
 
     out.sort_by(|a, b| b.mem_mb.partial_cmp(&a.mem_mb).unwrap_or(std::cmp::Ordering::Equal));
-    out.truncate(40);
+    out.truncate(160);
     out
 }
 

@@ -30,19 +30,52 @@ export default function App() {
   const [ctxIndex, setCtxIndex] = useState(0);
   const [snipOpen, setSnipOpen] = useState(false);
   const [ocrItem, setOcrItem] = useState<ResultItemData>();
+  const [expandedProcessGroups, setExpandedProcessGroups] = useState<Set<string>>(new Set());
   const [kw, setKw] = useState<KwMap>(DEFAULT_KEYWORDS);
   const [autoPaste, setAutoPaste] = useState(true);
   const [pwToHistory, setPwToHistory] = useState(false);
 
   const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey, kw);
-  const visibleResults = mode === "search" && ocrItem ? [ocrItem] : results;
+  const routedResults = results.flatMap((item): ResultItemData[] => {
+    if (item.kind !== "process-group") return [item];
+    const expanded = expandedProcessGroups.has(item.id);
+    const group = { ...item, expanded };
+    if (!expanded) return [group];
+    const children = (item.processes || []).map((proc) => ({
+      id: `proc:${proc.pid}`,
+      title: proc.name,
+      subtitle: `PID ${proc.pid} · ${proc.mem_mb.toFixed(1)} MB — → để Kill`,
+      kind: "process" as const,
+      pid: proc.pid,
+      path: proc.exe || undefined,
+      icon: proc.icon ?? undefined,
+      isChild: true,
+    }));
+    return [group, ...children];
+  });
+  const visibleResults = mode === "search" && ocrItem ? [ocrItem] : routedResults;
 
   const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" ? visibleResults : [];
   const { index, setIndex, move } = useKeyboardNav(navItems);
   const selectedClip = mode === "clipboard" ? clipItems[index] : undefined;
   const selectedResult = mode === "search" ? visibleResults[index] : undefined;
   const showKnowledge = selectedResult?.kind === "knowledge";
+  const detailKeywords = [kw.translate, kw.wiki, kw.formula, kw.review, kw.ocr].filter(Boolean);
+  const detailTrigger = mode === "search" && detailKeywords.some((key) => {
+    const lower = query.trim().toLowerCase();
+    const trigger = key.toLowerCase();
+    return lower === trigger || lower.startsWith(`${trigger} `);
+  });
   const dirty = !!selectedClip && draft !== selectedClip.content;
+
+  const toggleProcessGroup = (id: string, expand?: boolean) => {
+    setExpandedProcessGroups((current) => {
+      const next = new Set(current);
+      const shouldExpand = expand ?? !next.has(id);
+      if (shouldExpand) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
 
   // Nạp cấu hình (keyword, theme, auto-paste) khi khởi động + khi Settings lưu
   useEffect(() => {
@@ -184,14 +217,14 @@ export default function App() {
       apply(900, 520);
       return;
     }
-    if (showKnowledge) {
+    if (showKnowledge || detailTrigger) {
       apply(900, 520);
       return;
     }
     const el = panelRef.current;
     if (!el) return;
-    apply(680, Math.max(Math.min(Math.round(el.scrollHeight), 640), 72));
-  }, [visibleResults.length, mode, showKnowledge]);
+    apply(900, Math.max(Math.min(Math.round(el.scrollHeight), 640), 72));
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger]);
 
   const hide = () => {
     setQuery("");
@@ -249,6 +282,9 @@ export default function App() {
           // Enter -> mở context menu (Start/Stop/Restart hoặc Kill)
           setCtxOpen(true);
           setCtxIndex(0);
+          break;
+        case "process-group":
+          toggleProcessGroup(item.id);
           break;
         case "password":
           if (!item.secret) return;
@@ -369,9 +405,9 @@ export default function App() {
     }
   }
 
-  async function togglePinSelected() {
-    if (!selectedClip) return;
-    const id = selectedClip.id;
+  async function togglePinSelected(target: ClipItem | undefined = selectedClip) {
+    if (!target) return;
+    const id = target.id;
     const pinned = await invoke<boolean>("toggle_pin", { id }).catch(() => null);
     if (pinned === null) return;
     setClipItems((list) => {
@@ -483,11 +519,20 @@ export default function App() {
     }
   }
 
-  async function deleteSelectedClip() {
-    if (!selectedClip) return;
-    const id = selectedClip.id;
+  async function deleteSelectedClip(target: ClipItem | undefined = selectedClip) {
+    if (!target) return;
+    const id = target.id;
+    const selectedId = selectedClip?.id;
     await invoke("delete_clipboard_item", { id }).catch(() => {});
-    setClipItems((list) => list.filter((c) => c.id !== id));
+    setClipItems((list) => {
+      const filtered = list.filter((c) => c.id !== id);
+      const nextIndex = selectedId === id
+        ? Math.min(index, Math.max(0, filtered.length - 1))
+        : Math.max(0, filtered.findIndex((c) => c.id === selectedId));
+      requestAnimationFrame(() => setIndex(nextIndex));
+      return filtered;
+    });
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -517,6 +562,13 @@ export default function App() {
       }
       // Phím khác: đóng menu rồi xử lý bình thường
       setCtxOpen(false);
+    }
+
+    const currentItem = mode === "search" ? visibleResults[index] : undefined;
+    if (currentItem?.kind === "process-group" && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      toggleProcessGroup(currentItem.id, e.key === "ArrowRight");
+      return;
     }
 
     // "→" ở cuối ô nhập: mở Context Menu cho kết quả đang chọn
@@ -662,6 +714,8 @@ export default function App() {
           onSelect={setIndex}
           onPaste={(plain) => void pasteClip(plain)}
           onTogglePin={() => void togglePinSelected()}
+          onTogglePinItem={(item) => void togglePinSelected(item)}
+          onDeleteItem={(item) => void deleteSelectedClip(item)}
           onFocusInput={() => inputRef.current?.focus()}
           textareaRef={textareaRef}
           snipOpen={snipOpen}

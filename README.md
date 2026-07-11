@@ -29,7 +29,7 @@
 | `g <từ khoá>` · `yt <từ khoá>` | Tìm Google / YouTube |
 | `url github.com` | Mở URL |
 | `#uuid` · `#md5 text` · `#b64 text` | Tạo UUID / hash / base64 |
-| `ps <tên>` | **Task Manager** — tiến trình đang chạy (→ để **Kill** mạnh) |
+| `ps <tên>` | **Task Manager** — gom process trùng tên; Enter/→ bung các PID con |
 | `pw <từ khoá>` | **Mật khẩu trình duyệt** đã lưu (bật trong Settings) |
 | `< <tên>` | **Window Walker** — chuyển cửa sổ đang mở |
 | `{ <tên>` | Mở project VS Code gần đây |
@@ -50,6 +50,8 @@ Giao diện 2 cột kiểu Alfred: danh sách bên trái, **preview chỉnh sử
 - Lưu **text, link, ảnh (thumbnail + preview), danh sách file** — dán file thật (CF_HDROP), không chỉ dán đường dẫn.
 - `Enter` **auto-paste** thẳng vào cửa sổ trước · `⇧Enter` dán plain text · `Ctrl+1..9` dán nhanh
 - `Ctrl+P` ghim (item ghim không bị xóa tự động) · `Ctrl+S` biến thành Snippet · `Del` xóa
+- Mỗi hàng bên trái có icon **Ghim** và **Xóa** để click trực tiếp mà không làm mất focus bàn phím.
+- Item vừa ghim được đẩy ngay lên đầu; bỏ ghim trả về thứ tự thời gian.
 - Sửa nội dung là **tự lưu**. **Privacy Guard**: tự bỏ qua clipboard từ KeePass/Bitwarden/1Password…
 - Tự dọn: giữ tối đa N item chưa ghim / theo số ngày (chỉnh trong Settings), tự xóa cache ảnh mồ côi.
 
@@ -60,7 +62,9 @@ Cửa sổ Windows riêng (có viền, taskbar). Cho phép chỉnh: hotkey mở 
 ## Tính năng nhạy cảm (mặc định TẮT)
 
 - **Mật khẩu trình duyệt** (`pw`): đọc mật khẩu đã lưu trong Edge/Chrome/Brave/Cốc Cốc… của **chính tài khoản Windows đang đăng nhập** (giải mã DPAPI + AES-GCM, giống tính năng Export passwords của trình duyệt). Chỉ hoạt động cục bộ. Khi copy, mật khẩu **không lưu vào clipboard history** (có toggle riêng để đổi).
-- **Kill tiến trình mạnh** (`ps` → Kill): bật SeDebugPrivilege + TerminateProcess, fallback `taskkill /F /T` quyền admin — mạnh hơn Task Manager thường.
+- **Task Manager dạng nhóm**: process trùng tên được gom thành một hàng tổng RAM/số instance; Enter hoặc → bung PID con, ← thu nhóm.
+- **Kill tiến trình mạnh** (`ps` → bung nhóm → chọn PID → Kill): bật SeDebugPrivilege + TerminateProcess, fallback `taskkill /F /T` quyền admin.
+- Search và detail preview giữ cùng chiều rộng; resize chiều cao có animation hủy frame cũ để tránh giật khi chuyển chế độ.
 
 ## Kiến trúc
 

@@ -26,6 +26,7 @@ export type ResultKind =
   | "settings"
   | "ocr-cmd"
   | "process"
+  | "process-group"
   | "password";
 
 export interface ResultItemData {
@@ -55,6 +56,9 @@ export interface ResultItemData {
   secret?: string;
   preview?: string;
   audio?: string;
+  processes?: ProcInfo[];
+  isChild?: boolean;
+  expanded?: boolean;
 }
 
 export interface ProcInfo {
