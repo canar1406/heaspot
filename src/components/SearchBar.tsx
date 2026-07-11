@@ -33,7 +33,7 @@ export const SearchBar = forwardRef<HTMLInputElement, Props>(
           placeholder={
             mode === "clipboard"
               ? "Lọc clipboard history…"
-              : "Tìm app, file… (g web · yt video · in nội-dung · > lệnh · ; snippet)"
+              : "Tìm app, file… (g web · in nội-dung · = tính · conv đổi · tr dịch)"
           }
           className="flex-1 bg-transparent outline-none border-none text-[20px]
                      text-zinc-900 dark:text-zinc-50

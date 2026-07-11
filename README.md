@@ -2,6 +2,8 @@
 
 WinSpot là launcher kiểu Spotlight/Alfred dành cho Windows, xây dựng bằng **Tauri 2, Rust, React và TypeScript**. Ứng dụng tập trung vào tốc độ, thao tác bàn phím và tích hợp trực tiếp với các chức năng của Windows.
 
+Query thông thường chỉ tìm **app, file và folder**. Calculator, converter, dịch, web, URL và lệnh hệ thống chỉ được kích hoạt khi có trigger rõ ràng, giúp danh sách kết quả mặc định luôn gọn.
+
 ## Tính năng chính
 
 - Tìm và mở app, file, folder bằng fuzzy search.
@@ -56,9 +58,9 @@ Hỗ trợ `+`, `-`, `*`, `/`, `^`, `%`, ngoặc, số âm và các hàm:
 Ví dụ:
 
 ```text
-100 * 20%
+=100 * 20%
 =sin(pi/2)
-100*(50+20)/2
+=100*(50+20)/2
 ```
 
 Enter để copy kết quả.
@@ -68,21 +70,21 @@ Enter để copy kết quả.
 Unit Converter hỗ trợ chiều dài, khối lượng, thời gian, dung lượng dữ liệu và nhiệt độ:
 
 ```text
-10 ft to m
-5 kg sang lb
-100 f to c
-2 gb to mb
+conv 10 ft to m
+conv 5 kg sang lb
+conv 100 f to c
+conv 2 gb to mb
 ```
 
 Chuyển đổi Binary/Decimal/Hex/ASCII:
 
 ```text
-255 dec to hex
-0xff to bin
-1010 bin to dec
-hex 48 69 to ascii
-ascii Hello to hex
-ascii Hello to bin
+conv 255 dec to hex
+conv 0xff to bin
+conv 1010 bin to dec
+conv hex 48 69 to ascii
+conv ascii Hello to hex
+conv ascii Hello to bin
 ```
 
 Số nguyên lớn được xử lý bằng `BigInt`; chuỗi ASCII được chuyển theo byte UTF-8.
@@ -125,8 +127,8 @@ Smart Translate hiện sử dụng Google Translate public endpoint và Dictiona
 |---|---|
 | `g từ khoá` | Google Search |
 | `yt từ khoá` | YouTube Search |
-| `github.com` | Mở domain bằng trình duyệt mặc định |
-| `a@example.com` | Mở email bằng `mailto:` |
+| `url github.com` | Mở domain bằng trình duyệt mặc định |
+| `url a@example.com` | Mở email bằng `mailto:` |
 
 ### Công cụ Windows
 
@@ -145,7 +147,7 @@ Smart Translate hiện sử dụng Google Translate public endpoint và Dictiona
 | `# b64d text` | Base64 decode |
 | `time tokyo` | Giờ và ngày theo timezone |
 
-Các lệnh hệ thống được nhận diện trực tiếp: `sleep`, `shutdown`, `restart`, `lock`, `mute`, `empty trash`.
+Các lệnh hệ thống dùng trigger `sys`: `sys sleep`, `sys shutdown`, `sys restart`, `sys lock`, `sys mute`, `sys empty trash`.
 
 ### Snippets
 

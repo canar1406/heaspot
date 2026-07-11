@@ -37,14 +37,3 @@ export function tryWebSearch(input: string): ResultItemData | null {
     url: engine.build(q),
   };
 }
-
-/** Kết quả fallback cuối danh sách: tìm nguyên câu trên Google */
-export function googleFallback(query: string): ResultItemData {
-  return {
-    id: `web:fallback:${query}`,
-    title: `Tìm "${query}" trên Google`,
-    subtitle: "Web Search",
-    kind: "web",
-    url: ENGINES.g.build(query),
-  };
-}

@@ -5,7 +5,7 @@ import { tryConvert } from "../plugins/converter";
 import { tryTime } from "../plugins/timezones";
 import { tryUrl } from "../plugins/urlDetect";
 import { generatorHelp, parseGenerator } from "../plugins/generator";
-import { googleFallback, tryWebSearch } from "../plugins/websearch";
+import { tryWebSearch } from "../plugins/websearch";
 import { matchSystemCommands } from "../plugins/systemCommands";
 import type {
   BackendSearchResponse,
@@ -496,33 +496,52 @@ export function useSearch(query: string, refreshKey: number) {
       return () => clearTimeout(t);
     }
 
-    // Mặc định: calc / unit / time / url / web / system hiện ngay,
-    // app + file từ backend đổ về sau (debounce ~90ms)
-    const immediate: ResultItemData[] = [];
-    const calc = tryCalculate(q);
-    if (calc !== null) {
-      immediate.push({
+    // Các built-in chỉ chạy khi có trigger rõ ràng; query thường chỉ tìm app/file/folder.
+    if (q.startsWith("=")) {
+      const calc = tryCalculate(q);
+      setResults(calc === null ? [] : [{
         id: "calc",
         title: `= ${calc}`,
         subtitle: `${q} — Enter để copy kết quả`,
         kind: "calc",
         text: calc,
-      });
+      }]);
+      return;
     }
-    const unit = tryConvert(q);
-    if (unit) immediate.push(unit);
-    const time = tryTime(q);
-    if (time) immediate.push(time);
-    const url = tryUrl(q);
-    if (url) immediate.push(url);
-    const web = tryWebSearch(q);
-    if (web) immediate.push(web);
-    immediate.push(...matchSystemCommands(q));
 
-    setResults((prev) => [
-      ...immediate,
-      ...prev.filter((p) => ["app", "file", "folder"].includes(p.kind)),
-    ]);
+    const convert = /^(?:conv|convert)\s+(.+)$/i.exec(q);
+    if (convert) {
+      const unit = tryConvert(convert[1]);
+      setResults(unit ? [unit] : []);
+      return;
+    }
+
+    if (/^(?:time|date|gio|giờ)(?:\s|$)/i.test(q)) {
+      const time = tryTime(q);
+      setResults(time ? [time] : []);
+      return;
+    }
+
+    const urlTrigger = /^url\s+(.+)$/i.exec(q);
+    if (urlTrigger) {
+      const url = tryUrl(urlTrigger[1]);
+      setResults(url ? [url] : []);
+      return;
+    }
+
+    const web = tryWebSearch(q);
+    if (web) {
+      setResults([web]);
+      return;
+    }
+
+    const sys = /^sys\s+(.+)$/i.exec(q);
+    if (sys) {
+      setResults(matchSystemCommands(sys[1]));
+      return;
+    }
+
+    setResults((prev) => prev.filter((p) => ["app", "file", "folder"].includes(p.kind)));
 
     const t = setTimeout(async () => {
       try {
@@ -537,11 +556,9 @@ export function useSearch(query: string, refreshKey: number) {
           path: r.path,
           icon: r.icon ?? undefined,
         }));
-        const all = [...immediate, ...backend];
-        if (!web && calc === null && !url) all.push(googleFallback(q));
-        setResults(all);
+        setResults(backend);
       } catch {
-        fresh(() => setResults(immediate));
+        fresh(() => setResults([]));
       }
     }, 90);
     return () => clearTimeout(t);

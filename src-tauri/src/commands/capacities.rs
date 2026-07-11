@@ -87,21 +87,12 @@ try {
 } catch { '[]' }
 "#;
 
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .env("CAP_TOKEN", &token)
-            .env("CAP_QUERY", &q)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
+    let stdout = tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::run_hidden_ps(script, &[("CAP_TOKEN", &token), ("CAP_QUERY", &q)])
     })
     .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let json = stdout.trim();
     if json.is_empty() {
         return Ok(Vec::new());
