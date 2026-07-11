@@ -41,7 +41,7 @@
 | `settings` | Mở cửa sổ Cài đặt |
 | `workflow` / `workflow install <path>` | Alfred Workflow (Python/Node/PHP/Ruby/Bash) |
 
-Điều hướng: `↑ ↓` chọn · `Enter` mở · **`→` mở Context Menu** (Run as admin, Open location, Copy path, Kill…) · `Tab` điền · `Ctrl+1..9` mở nhanh · `Esc` đóng.
+Điều hướng: `↑ ↓` chọn · `Enter` mở · **`→` mở Context Menu** (Run as admin, Open location, Copy path, Kill…) · `Tab` điền · `Ctrl+1..9` mở nhanh · `Esc` đóng. Selection được giữ ổn định khi kết quả async cập nhật và chỉ trở về item đầu khi người dùng sửa truy vấn.
 
 ## Clipboard Manager (Win+V)
 

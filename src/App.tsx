@@ -658,7 +658,11 @@ export default function App() {
         ref={inputRef}
         value={query}
         mode={mode}
-        onChange={(value) => { setOcrItem(undefined); setQuery(value); }}
+        onChange={(value) => {
+          setOcrItem(undefined);
+          setIndex(0);
+          setQuery(value);
+        }}
         onKeyDown={onKeyDown}
       />
 
