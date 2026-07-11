@@ -10,6 +10,8 @@ pub struct Settings {
     // Keyword/cú pháp kích hoạt từng tính năng — JSON { featureId: keyword }.
     // Backend chỉ lưu; router ở frontend đọc và định tuyến theo giá trị này.
     pub keywords: String,
+    // JSON { featureId: "Alt+Shift+T" } — hotkey toàn cục mở thẳng feature.
+    pub feature_hotkeys: String,
     // Clipboard & Privacy
     pub max_clipboard_items: u32,
     pub clipboard_retention_days: u32,
@@ -34,6 +36,7 @@ pub fn load(conn: &rusqlite::Connection) -> Settings {
         search_hotkey: value(conn, "search_hotkey", "Alt+Space"),
         clipboard_hotkey: value(conn, "clipboard_hotkey", "Win+V"),
         keywords: value(conn, "keywords", "{}"),
+        feature_hotkeys: value(conn, "feature_hotkeys", "{}"),
         max_clipboard_items: value(conn, "max_clipboard_items", "500").parse().unwrap_or(500).clamp(50, 2000),
         clipboard_retention_days: value(conn, "clipboard_retention_days", "0").parse().unwrap_or(0).min(3650),
         privacy_apps: value(conn, "privacy_apps", "keepass,bitwarden,1password,lastpass,dashlane,protonpass"),
@@ -59,7 +62,13 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
     if settings.clipboard_retention_days > 3650 {
         return Err("Thời gian lưu clipboard tối đa là 3650 ngày".into());
     }
-    crate::core::hotkey::apply_hotkeys(&app, &settings.search_hotkey, &settings.clipboard_hotkey)?;
+    crate::core::hotkey::apply_hotkeys(
+        &app,
+        &settings.search_hotkey,
+        &settings.clipboard_hotkey,
+        &settings.feature_hotkeys,
+        &settings.keywords,
+    )?;
     set_startup(settings.launch_at_startup)?;
 
     let state = app.state::<crate::AppState>();
@@ -68,6 +77,7 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
         ("search_hotkey", settings.search_hotkey.clone()),
         ("clipboard_hotkey", settings.clipboard_hotkey.clone()),
         ("keywords", settings.keywords.clone()),
+        ("feature_hotkeys", settings.feature_hotkeys.clone()),
         ("max_clipboard_items", settings.max_clipboard_items.to_string()),
         ("clipboard_retention_days", settings.clipboard_retention_days.to_string()),
         ("privacy_apps", settings.privacy_apps.clone()),

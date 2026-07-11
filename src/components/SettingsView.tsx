@@ -8,6 +8,7 @@ const DEFAULTS: AppSettings = {
   search_hotkey: "Alt+Space",
   clipboard_hotkey: "Win+V",
   keywords: "{}",
+  feature_hotkeys: "{}",
   max_clipboard_items: 500,
   clipboard_retention_days: 0,
   privacy_apps: "keepass,bitwarden,1password,lastpass,dashlane,protonpass",
@@ -26,6 +27,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("general");
   const [value, setValue] = useState<AppSettings>(DEFAULTS);
   const [kw, setKw] = useState<KwMap>(DEFAULT_KEYWORDS);
+  const [featureHotkeys, setFeatureHotkeys] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -34,6 +36,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
       .then((s) => {
         setValue(s);
         setKw(resolveKeywords(s.keywords));
+        try { setFeatureHotkeys(JSON.parse(s.feature_hotkeys || "{}")); } catch { setFeatureHotkeys({}); }
         applyTheme(s.theme);
       })
       .catch(() => {});
@@ -70,7 +73,11 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     setSaving(true);
     setStatus("Đang lưu…");
     try {
-      const payload: AppSettings = { ...value, keywords: JSON.stringify(kw) };
+      const payload: AppSettings = {
+        ...value,
+        keywords: JSON.stringify(kw),
+        feature_hotkeys: JSON.stringify(featureHotkeys),
+      };
       await invoke("save_settings", { settings: payload });
       applyTheme(value.theme);
       setStatus("✓ Đã lưu cấu hình");
@@ -93,7 +100,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
         {(
           [
             ["general", "Chung"],
-            ["keywords", "Keyword / Cú pháp"],
+            ["keywords", "Keyword & Hotkey tính năng"],
             ["clipboard", "Clipboard & Bảo mật"],
           ] as const
         ).map(([id, label]) => (
@@ -193,6 +200,14 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                               {f.kind === "prefix" ? "ký tự đầu" : "từ khóa"} · vd: {f.example}
                             </span>
                           </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <span className="text-[10px] text-zinc-400 w-16 shrink-0">Hotkey</span>
+                            <HotkeyCapture
+                              value={featureHotkeys[f.id] || ""}
+                              onChange={(hotkey) => setFeatureHotkeys({ ...featureHotkeys, [f.id]: hotkey })}
+                            />
+                            <span className="text-[10px] text-zinc-400">Bôi đen text → nhấn hotkey để mở thẳng</span>
+                          </div>
                         </div>
                       );
                     })}
@@ -279,5 +294,27 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">{title}</div>
       {children}
     </div>
+  );
+}
+
+function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <input
+      readOnly
+      value={value}
+      placeholder="Click rồi nhấn phím"
+      title="Backspace/Delete để xóa hotkey"
+      className="w-36 rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 px-2 py-1 text-[11px] font-mono outline-none focus:border-blue-500/60"
+      onKeyDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "Backspace" || e.key === "Delete") { onChange(""); return; }
+        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+        const mods = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Super" : ""].filter(Boolean);
+        if (mods.length === 0) return;
+        const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+        onChange([...mods, key].join("+"));
+      }}
+    />
   );
 }

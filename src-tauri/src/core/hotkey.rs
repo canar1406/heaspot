@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::{collections::HashMap, str::FromStr};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Alt+Space bị app khác chiếm (VD: PowerToys Run) -> chuyển sang bắt bằng LL hook
 static ALT_SPACE_VIA_HOOK: AtomicBool = AtomicBool::new(false);
@@ -13,18 +14,21 @@ fn config() -> &'static RwLock<(String, String)> {
     CONFIG.get_or_init(|| RwLock::new(("Alt+Space".into(), "Win+V".into())))
 }
 
+#[derive(Clone)]
+struct FeatureBinding {
+    id: String,
+    hotkey: String,
+    keyword: String,
+}
+
+fn feature_bindings() -> &'static RwLock<Vec<FeatureBinding>> {
+    static BINDINGS: OnceLock<RwLock<Vec<FeatureBinding>>> = OnceLock::new();
+    BINDINGS.get_or_init(|| RwLock::new(Vec::new()))
+}
+
 fn shortcut_for(value: &str) -> Option<Shortcut> {
-    match value {
-        "Alt+Space" => Some(Shortcut::new(Some(Modifiers::ALT), Code::Space)),
-        "Ctrl+Space" => Some(Shortcut::new(Some(Modifiers::CONTROL), Code::Space)),
-        "Ctrl+Alt+Space" => Some(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space)),
-        "Alt+F1" => Some(Shortcut::new(Some(Modifiers::ALT), Code::F1)),
-        "Ctrl+Shift+V" => Some(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV)),
-        "Alt+V" => Some(Shortcut::new(Some(Modifiers::ALT), Code::KeyV)),
-        "Ctrl+Alt+V" => Some(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyV)),
-        "Win+V" => None,
-        _ => None,
-    }
+    if value.eq_ignore_ascii_case("Win+V") { return None; }
+    Shortcut::from_str(value).ok()
 }
 
 /// Plugin global-shortcut xử lý Alt+Space và Ctrl+Shift+V.
@@ -42,6 +46,13 @@ pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             } else if shortcut_for(&current.1).as_ref() == Some(shortcut)
                 || (current.1 == "Win+V" && shortcut_for("Ctrl+Shift+V").as_ref() == Some(shortcut)) {
                 crate::core::window::toggle(app, "clipboard");
+            } else {
+                let binding = feature_bindings().read().ok()
+                    .and_then(|items| items.iter().find(|b| shortcut_for(&b.hotkey).as_ref() == Some(shortcut)).cloned());
+                if let Some(binding) = binding {
+                    let app = app.clone();
+                    std::thread::spawn(move || activate_feature_hotkey(app, binding));
+                }
             }
         })
         .build()
@@ -56,11 +67,23 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         let conn = state.db.lock().map_err(|e| std::io::Error::other(e.to_string()))?;
         crate::commands::settings::load(&conn)
     };
-    apply_hotkeys(app, &settings.search_hotkey, &settings.clipboard_hotkey)
+    apply_hotkeys(
+        app,
+        &settings.search_hotkey,
+        &settings.clipboard_hotkey,
+        &settings.feature_hotkeys,
+        &settings.keywords,
+    )
         .map_err(|e| std::io::Error::other(e).into())
 }
 
-pub fn apply_hotkeys(app: &AppHandle, search: &str, clipboard: &str) -> Result<(), String> {
+pub fn apply_hotkeys(
+    app: &AppHandle,
+    search: &str,
+    clipboard: &str,
+    feature_hotkeys_json: &str,
+    keywords_json: &str,
+) -> Result<(), String> {
     let search_shortcut = shortcut_for(search).ok_or("Hotkey launcher không hợp lệ")?;
     if clipboard != "Win+V" && shortcut_for(clipboard).is_none() { return Err("Hotkey clipboard không hợp lệ".into()); }
     let gs = app.global_shortcut();
@@ -78,9 +101,91 @@ pub fn apply_hotkeys(app: &AppHandle, search: &str, clipboard: &str) -> Result<(
         // Giữ Ctrl+Shift+V làm phím dự phòng khi Win+V bị policy/hook của hệ thống chặn.
         let _ = gs.register(shortcut_for("Ctrl+Shift+V").unwrap());
     }
+    let feature_hotkeys: HashMap<String, String> = serde_json::from_str(feature_hotkeys_json).unwrap_or_default();
+    let keyword_overrides: HashMap<String, String> = serde_json::from_str(keywords_json).unwrap_or_default();
+    let mut bindings = Vec::new();
+    for (id, hotkey) in feature_hotkeys {
+        let hotkey = hotkey.trim().to_string();
+        if hotkey.is_empty() { continue; }
+        let shortcut = shortcut_for(&hotkey).ok_or_else(|| format!("Hotkey tính năng {id} không hợp lệ: {hotkey}"))?;
+        gs.register(shortcut).map_err(|e| format!("Hotkey {hotkey} của {id} đang bị chiếm hoặc bị trùng: {e}"))?;
+        let keyword = keyword_overrides.get(&id).cloned().filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| default_feature_keyword(&id).to_string());
+        bindings.push(FeatureBinding { id, hotkey, keyword });
+    }
     WIN_V_ENABLED.store(clipboard == "Win+V", Ordering::Relaxed);
     if let Ok(mut c) = config().write() { *c = (search.to_string(), clipboard.to_string()); }
+    if let Ok(mut items) = feature_bindings().write() { *items = bindings; }
     Ok(())
+}
+
+fn default_feature_keyword(id: &str) -> &'static str {
+    match id {
+        "fulltext" => "in", "translate" => "tr", "wiki" => "wiki", "review" => "review",
+        "formula" => "formula", "chemistry" => "chem", "google" => "g", "youtube" => "yt",
+        "ocr" => "ocr", "convert" => "conv", "time" => "time", "url" => "url",
+        "password" => "pw", "generator" => "#", "snippet" => ";", "process" => "ps",
+        "system" => "sys", "window" => "<", "vscode" => "{", "service" => "!",
+        "registry" => ":", "terminal" => ">", _ => "",
+    }
+}
+
+fn activate_feature_hotkey(app: AppHandle, binding: FeatureBinding) {
+    // Đợi người dùng nhả tổ hợp Alt/Ctrl/Shift rồi mới gửi Ctrl+C.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    let selected = if binding.id == "ocr" { None } else { capture_selected_text() };
+    let prefill = if let Some(text) = selected.filter(|s| !s.trim().is_empty()) {
+        format!("{} {}", binding.keyword, text.trim())
+    } else if matches!(binding.id.as_str(), "ocr" | "review") {
+        binding.keyword
+    } else {
+        format!("{} ", binding.keyword)
+    };
+    crate::core::window::toggle_with(&app, "search", &prefill);
+}
+
+fn capture_selected_text() -> Option<String> {
+    crate::commands::clipboard::suppress_watcher_for(2_500);
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let saved_text = clipboard.get_text().ok();
+    let saved_image = if saved_text.is_none() {
+        clipboard.get_image().ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
+    } else { None };
+    let sentinel = format!("__HEASPOT_SELECTION_{}__", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos());
+    clipboard.set_text(sentinel.clone()).ok()?;
+
+    unsafe {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP};
+        const VK_CONTROL: u8 = 0x11;
+        const VK_C: u8 = 0x43;
+        keybd_event(VK_CONTROL, 0, 0, 0);
+        keybd_event(VK_C, 0, 0, 0);
+        keybd_event(VK_C, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+    }
+
+    let mut selected = None;
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(35));
+        if let Ok(text) = clipboard.get_text() {
+            if text != sentinel {
+                selected = (!text.trim().is_empty() && text.len() <= 20_000).then_some(text);
+                break;
+            }
+        }
+    }
+
+    if let Some(text) = saved_text {
+        let _ = clipboard.set_text(text);
+    } else if let Some((width, height, bytes)) = saved_image {
+        let _ = clipboard.set_image(arboard::ImageData {
+            width, height, bytes: std::borrow::Cow::Owned(bytes),
+        });
+    } else {
+        let _ = clipboard.set_text(String::new());
+    }
+    selected
 }
 
 // ---------------------------------------------------------------------------
@@ -162,4 +267,13 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_user_feature_hotkey() {
+        assert!(super::shortcut_for("Alt+Shift+T").is_some());
+        assert!(super::shortcut_for("Ctrl+Alt+F").is_some());
+    }
 }

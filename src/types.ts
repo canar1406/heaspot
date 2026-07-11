@@ -194,6 +194,7 @@ export interface AppSettings {
   search_hotkey: string;
   clipboard_hotkey: string;
   keywords: string; // JSON { featureId: keyword }
+  feature_hotkeys: string; // JSON { featureId: global hotkey }
   max_clipboard_items: number;
   clipboard_retention_days: number;
   privacy_apps: string;

@@ -10,6 +10,7 @@ use rusqlite::params;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Serialize)]
@@ -21,6 +22,14 @@ pub struct ClipItem {
     pub pinned: bool,
     pub source_app: String,
     pub thumb: String, // data URL thumbnail cho ảnh
+}
+
+static SUPPRESS_WATCHER_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+
+pub fn suppress_watcher_for(duration_ms: u64) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    SUPPRESS_WATCHER_UNTIL_MS.store(now.saturating_add(duration_ms), Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +60,9 @@ pub fn spawn_watcher(app: AppHandle) {
 
         loop {
             std::thread::sleep(Duration::from_millis(700));
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64).unwrap_or(0);
+            if now < SUPPRESS_WATCHER_UNTIL_MS.load(Ordering::Relaxed) { continue; }
             policy_ticks = policy_ticks.saturating_add(1);
             if policy_ticks >= 30 {
                 policy = crate::commands::settings::load(&conn);

@@ -57,7 +57,17 @@ Giao diện 2 cột kiểu Alfred: danh sách bên trái, **preview chỉnh sử
 
 ## Cửa sổ Settings
 
-Cửa sổ Windows riêng (có viền, taskbar). Cho phép chỉnh: hotkey mở app, **keyword của mọi tính năng**, theme (system/light/dark), auto-paste, giới hạn/thời gian lưu clipboard, Privacy Guard, tự khởi động cùng Windows, và bật/tắt các tính năng nhạy cảm.
+Cửa sổ Windows riêng (có viền, taskbar). Cho phép chỉnh: hotkey mở app, **keyword và global hotkey riêng của mọi tính năng**, theme (system/light/dark), auto-paste, giới hạn/thời gian lưu clipboard, Privacy Guard, tự khởi động cùng Windows, và bật/tắt các tính năng nhạy cảm.
+
+### Feature Hotkeys và text đang bôi đen
+
+Trong tab **Keyword & Hotkey tính năng**, click ô Hotkey rồi nhấn tổ hợp mong muốn, ví dụ `Alt+Shift+T` cho Translate. Khi đang bôi đen nội dung ở trình duyệt/editor:
+
+- Hotkey Translate mở `tr <selection>`.
+- Hotkey Converter mở `conv <selection>`.
+- Hotkey Formula/Wikipedia/Full-text mở feature tương ứng với selection.
+- Nếu không có selection, HeaSpot mở sẵn keyword để nhập tiếp.
+- HeaSpot copy selection tạm thời, khóa clipboard watcher và khôi phục clipboard text/ảnh cũ trước khi mở cửa sổ; không tự Enter/chạy hành động nguy hiểm.
 
 ## Tính năng nhạy cảm (mặc định TẮT)
 
