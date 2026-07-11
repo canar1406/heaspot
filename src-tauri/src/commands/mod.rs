@@ -1,8 +1,10 @@
 pub mod capacities;
 pub mod clipboard;
 pub mod knowledge;
+pub mod ocr;
 pub mod search;
 pub mod settings;
+pub mod study;
 pub mod snippets;
 pub mod system;
 

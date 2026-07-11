@@ -72,7 +72,7 @@ pub fn copy_text(text: String) -> Result<(), String> {
 }
 
 /// ShellExecuteW với verb "runas" — hiện UAC prompt
-fn shell_execute_runas(file: &str, args: Option<&str>) -> Result<(), String> {
+pub(crate) fn shell_execute_runas(file: &str, args: Option<&str>) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     let to_wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
     let verb = to_wide("runas");

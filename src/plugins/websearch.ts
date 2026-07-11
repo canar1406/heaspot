@@ -1,39 +1,33 @@
 import type { ResultItemData } from "../types";
 
-interface Engine {
-  name: string;
-  build: (q: string) => string;
+export interface WebEngineKeywords {
+  google: string;
+  youtube: string;
 }
 
-const ENGINES: Record<string, Engine> = {
-  g: {
-    name: "Google",
-    build: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
-  },
-  yt: {
-    name: "YouTube",
-    build: (q) =>
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`,
-  },
-  wiki: {
-    name: "Wikipedia",
-    build: (q) =>
-      `https://vi.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(q)}`,
-  },
-};
-
-/** Bắt cú pháp "g <từ khoá>", "yt <từ khoá>", "wiki <từ khoá>" */
-export function tryWebSearch(input: string): ResultItemData | null {
+/** Bắt cú pháp "<google> <từ khoá>" / "<youtube> <từ khoá>" theo keyword tùy chỉnh */
+export function tryWebSearch(input: string, kw: WebEngineKeywords): ResultItemData | null {
   const m = /^(\S+)\s+(.+)$/.exec(input.trim());
   if (!m) return null;
-  const engine = ENGINES[m[1].toLowerCase()];
-  if (!engine) return null;
+  const token = m[1].toLowerCase();
   const q = m[2].trim();
+
+  let name = "";
+  let url = "";
+  if (token === kw.google.toLowerCase()) {
+    name = "Google";
+    url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  } else if (token === kw.youtube.toLowerCase()) {
+    name = "YouTube";
+    url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+  } else {
+    return null;
+  }
   return {
-    id: `web:${m[1]}:${q}`,
-    title: `Tìm "${q}" trên ${engine.name}`,
-    subtitle: engine.build(q),
+    id: `web:${token}:${q}`,
+    title: `Tìm "${q}" trên ${name}`,
+    subtitle: url,
     kind: "web",
-    url: engine.build(q),
+    url,
   };
 }

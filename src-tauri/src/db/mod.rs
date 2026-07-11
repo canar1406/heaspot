@@ -1,12 +1,12 @@
 use rusqlite::Connection;
 use std::path::PathBuf;
 
-/// Đường dẫn DB: %APPDATA%\winspot\winspot.db
+/// Đường dẫn DB: %APPDATA%\heaspot\heaspot.db
 pub fn db_path() -> PathBuf {
     let base = dirs::data_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("winspot").join("winspot.db")
+    base.join("heaspot").join("heaspot.db")
 }
 
 /// Mở kết nối SQLite (mỗi thread một connection, WAL cho phép đọc/ghi song song)
@@ -33,6 +33,13 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS study_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL UNIQUE,
+            translation TEXT NOT NULL,
+            details TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );",
     )?;
     // Migration cho bảng clipboard cũ (bỏ qua lỗi nếu cột đã tồn tại)

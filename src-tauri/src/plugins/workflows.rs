@@ -37,7 +37,7 @@ fn store() -> &'static RwLock<Vec<WorkflowInfo>> {
 
 pub fn workflows_dir() -> PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("winspot").join("workflows")
+    base.join("heaspot").join("workflows")
 }
 
 /// Map "type" trong info.plist / đuôi file script -> runner trên Windows

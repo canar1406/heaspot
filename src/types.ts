@@ -23,7 +23,10 @@ export type ResultKind =
   | "workflow"
   | "wf-cmd"
   | "knowledge"
-  | "settings";
+  | "settings"
+  | "ocr-cmd"
+  | "process"
+  | "password";
 
 export interface ResultItemData {
   id: string;
@@ -46,7 +49,27 @@ export interface ResultItemData {
   icon?: string;
   /** window walker: handle cửa sổ */
   hwnd?: number;
+  /** process: PID để kill */
+  pid?: number;
+  /** password: username & mật khẩu (secret) để copy an toàn */
+  secret?: string;
   preview?: string;
+  audio?: string;
+}
+
+export interface ProcInfo {
+  pid: number;
+  name: string;
+  exe: string;
+  mem_mb: number;
+  icon?: string | null;
+}
+
+export interface BrowserPassword {
+  browser: string;
+  url: string;
+  username: string;
+  password: string;
 }
 
 export interface OpenWindowInfo {
@@ -120,7 +143,19 @@ export interface TranslationHit {
   source_language: string;
   target_language: string;
   phonetic: string;
+  audio_url: string;
+  collocations: string[];
+  synonyms: string[];
+  antonyms: string[];
   entries: TranslationEntry[];
+}
+
+export interface StudyWord {
+  id: number;
+  word: string;
+  translation: string;
+  details: string;
+  created_at: string;
 }
 
 export interface BackendSearchResponse {
@@ -154,10 +189,15 @@ export interface ClipItem {
 export interface AppSettings {
   search_hotkey: string;
   clipboard_hotkey: string;
+  keywords: string; // JSON { featureId: keyword }
   max_clipboard_items: number;
   clipboard_retention_days: number;
   privacy_apps: string;
+  auto_paste: boolean;
+  enable_browser_passwords: boolean;
+  password_to_history: boolean;
+  theme: string; // "system" | "light" | "dark"
   launch_at_startup: boolean;
 }
 
-export type UiMode = "search" | "clipboard" | "settings";
+export type UiMode = "search" | "clipboard";

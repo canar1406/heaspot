@@ -25,14 +25,30 @@ pub fn init_everything(app: &tauri::AppHandle) {
         if ev.search("winspot::ipc::probe", 1).is_some() {
             return;
         }
-        let Some(exe) = dir
-            .map(|d| d.join("Everything.exe"))
-            .filter(|p| p.exists())
-        else {
+        let Some(evdir) = dir.filter(|d| d.join("Everything.exe").exists()) else {
             return;
         };
-        // -startup: chạy nền, không hiện cửa sổ chính
-        let _ = std::process::Command::new(exe).arg("-startup").spawn();
+        let exe = evdir.join("Everything.exe");
+        // Ghi Everything.ini (tray_icon=0 -> KHÔNG hiện tray, chạy nền hoàn toàn)
+        // vào %APPDATA%\heaspot\everything để chắc chắn ghi được (resources có thể read-only).
+        let cfg_dir = crate::db::db_path()
+            .parent()
+            .map(|p| p.join("everything"))
+            .unwrap_or_else(|| evdir.clone());
+        let _ = std::fs::create_dir_all(&cfg_dir);
+        let ini = cfg_dir.join("Everything.ini");
+        if !ini.exists() {
+            let _ = std::fs::write(
+                &ini,
+                "tray_icon=0\r\nrun_in_background=1\r\nstart_in_background=1\r\nupdate_notification=0\r\n",
+            );
+        }
+        // -config trỏ tới ini của ta; -startup: chạy nền ngay, không hiện cửa sổ.
+        let _ = std::process::Command::new(exe)
+            .arg("-config")
+            .arg(&ini)
+            .arg("-startup")
+            .spawn();
     });
 }
 
@@ -157,6 +173,12 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
 
     results.sort_by(|a, b| b.score.cmp(&a.score));
     results.truncate(15);
+    // Trích icon thật cho file/folder (chỉ tập kết quả cuối, có cache theo path)
+    for r in results.iter_mut() {
+        if r.icon.is_none() && (r.kind == "file" || r.kind == "folder") {
+            r.icon = crate::core::indexer::icon_for(&r.path);
+        }
+    }
     SearchResponse { results, engine }
 }
 

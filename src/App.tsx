@@ -7,11 +7,12 @@ import { SearchBar } from "./components/SearchBar";
 import { ResultList } from "./components/ResultList";
 import { ClipboardView } from "./components/ClipboardView";
 import { KnowledgePreview } from "./components/KnowledgePreview";
-import { SettingsView } from "./components/SettingsView";
 import { actionsFor, ContextMenu, type CtxAction } from "./components/ContextMenu";
 import { useKeyboardNav } from "./hooks/useKeyboardNav";
 import { useSearch } from "./hooks/useSearch";
-import type { ClipItem, ResultItemData, UiMode } from "./types";
+import { resolveKeywords, DEFAULT_KEYWORDS, type KwMap } from "./keywords";
+import { applyTheme } from "./theme";
+import type { AppSettings, ClipItem, ResultItemData, UiMode } from "./types";
 
 export default function App() {
   const [mode, setMode] = useState<UiMode>("search");
@@ -28,15 +29,39 @@ export default function App() {
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ctxIndex, setCtxIndex] = useState(0);
   const [snipOpen, setSnipOpen] = useState(false);
+  const [ocrItem, setOcrItem] = useState<ResultItemData>();
+  const [kw, setKw] = useState<KwMap>(DEFAULT_KEYWORDS);
+  const [autoPaste, setAutoPaste] = useState(true);
+  const [pwToHistory, setPwToHistory] = useState(false);
 
-  const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey);
+  const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey, kw);
+  const visibleResults = mode === "search" && ocrItem ? [ocrItem] : results;
 
-  const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" ? results : [];
+  const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" ? visibleResults : [];
   const { index, setIndex, move } = useKeyboardNav(navItems);
   const selectedClip = mode === "clipboard" ? clipItems[index] : undefined;
-  const selectedResult = mode === "search" ? results[index] : undefined;
+  const selectedResult = mode === "search" ? visibleResults[index] : undefined;
   const showKnowledge = selectedResult?.kind === "knowledge";
   const dirty = !!selectedClip && draft !== selectedClip.content;
+
+  // Nạp cấu hình (keyword, theme, auto-paste) khi khởi động + khi Settings lưu
+  useEffect(() => {
+    const loadSettings = () => {
+      invoke<AppSettings>("get_settings")
+        .then((s) => {
+          setKw(resolveKeywords(s.keywords));
+          setAutoPaste(s.auto_paste);
+          setPwToHistory(s.password_to_history);
+          applyTheme(s.theme);
+        })
+        .catch(() => {});
+    };
+    loadSettings();
+    const unlisten = listen("winspot://settings-changed", loadSettings);
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   // Nạp nội dung item được chọn vào khung edit
   useEffect(() => {
@@ -88,9 +113,14 @@ export default function App() {
   // Backend báo chuẩn bị hiện cửa sổ (Alt+Space / Win+V / tray).
   // Thứ tự chống giật: reset UI về opacity 0 TRƯỚC -> show cửa sổ -> chạy animation.
   useEffect(() => {
-    const unlisten = listen<string>("winspot://prepare", (e) => {
-      setMode(e.payload === "clipboard" ? "clipboard" : e.payload === "settings" ? "settings" : "search");
-      setQuery("");
+    type Prepare = { mode?: string; prefill?: string };
+    const unlisten = listen<Prepare | string>("winspot://prepare", (e) => {
+      const payload = typeof e.payload === "string" ? { mode: e.payload } : e.payload;
+      const nextMode = payload.mode === "clipboard" ? "clipboard" : "search";
+      const prefill = payload.prefill ?? "";
+      setMode(nextMode);
+      setQuery(prefill);
+      setOcrItem(undefined);
       setIndex(0);
       setRefreshKey((k) => k + 1);
       controls.set({ opacity: 0, scale: 0.98, y: -6 });
@@ -99,7 +129,13 @@ export default function App() {
         await win.show().catch(() => {});
         await win.setFocus().catch(() => {});
         inputRef.current?.focus();
-        inputRef.current?.select();
+        // prefill có sẵn -> đặt con trỏ cuối để gõ tiếp; không có -> select toàn bộ
+        if (prefill) {
+          const el = inputRef.current;
+          if (el) el.setSelectionRange(prefill.length, prefill.length);
+        } else {
+          inputRef.current?.select();
+        }
         setShowTick((t) => t + 1); // kích hoạt animation bung mở
       });
     });
@@ -114,6 +150,7 @@ export default function App() {
     const unlisten = listen("winspot://hidden", () => {
       setMode("search");
       setQuery("");
+      setOcrItem(undefined);
       setIndex(0);
     });
     return () => {
@@ -147,10 +184,6 @@ export default function App() {
       apply(900, 520);
       return;
     }
-    if (mode === "settings") {
-      apply(900, 560);
-      return;
-    }
     if (showKnowledge) {
       apply(900, 520);
       return;
@@ -158,7 +191,7 @@ export default function App() {
     const el = panelRef.current;
     if (!el) return;
     apply(680, Math.max(Math.min(Math.round(el.scrollHeight), 640), 72));
-  }, [results.length, mode, showKnowledge]);
+  }, [visibleResults.length, mode, showKnowledge]);
 
   const hide = () => {
     setQuery("");
@@ -191,7 +224,7 @@ export default function App() {
           if (item.text) {
             await invoke("set_capacities_token", { token: item.text });
             setRefreshKey((k) => k + 1);
-            setQuery("in ");
+            setQuery(`${kw.fulltext} `);
           } else {
             setQuery("capacities token ");
           }
@@ -212,9 +245,19 @@ export default function App() {
           await invoke("open_regedit", { path: item.path });
           break;
         case "service":
-          // Enter trên service -> mở context menu Start/Stop/Restart
+        case "process":
+          // Enter -> mở context menu (Start/Stop/Restart hoặc Kill)
           setCtxOpen(true);
           setCtxIndex(0);
+          break;
+        case "password":
+          if (!item.secret) return;
+          if (pwToHistory) {
+            await invoke("copy_text", { text: item.secret });
+          } else {
+            await invoke("copy_secret", { text: item.secret });
+          }
+          hide();
           break;
         case "generated":
         case "unit":
@@ -263,13 +306,39 @@ export default function App() {
             keyword: item.keyword,
             content: item.text,
           });
-          setQuery(";");
+          setQuery(kw.snippet);
           setRefreshKey((k) => k + 1);
           break;
         case "settings":
-          setQuery("");
-          setMode("settings");
+          hide();
+          await invoke("open_settings_window");
           break;
+        case "ocr-cmd": {
+          let text = "";
+          let preview = "";
+          try {
+            text = await invoke<string>("capture_ocr");
+            preview = text;
+          } catch (err) {
+            preview = `OCR không thành công:\n${String(err)}`;
+          }
+          setQuery("");
+          setOcrItem({
+            id: "ocr:result",
+            title: text ? "Kết quả OCR" : "Không nhận dạng được",
+            subtitle: text ? `${text.length} ký tự · Enter để dán` : "Thử chụp lại vùng rõ hơn",
+            kind: "knowledge",
+            action: "ocr",
+            text,
+            preview,
+          });
+          setIndex(0);
+          const win = getCurrentWindow();
+          await win.show().catch(() => {});
+          await win.setFocus().catch(() => {});
+          inputRef.current?.focus();
+          break;
+        }
       }
     } catch (err) {
       console.error("execute lỗi:", err);
@@ -286,13 +355,18 @@ export default function App() {
     );
   }
 
-  /** AUTO-PASTE: dán item (bản đã sửa nếu có) thẳng vào cửa sổ trước đó */
+  /** Enter trên clipboard: auto-paste vào cửa sổ trước, hoặc chỉ copy nếu tắt auto-paste */
   async function pasteClip(plain: boolean, target?: ClipItem) {
     const item = target ?? selectedClip;
     if (!item) return;
     if (item.id === selectedClip?.id) await saveDraft();
     setQuery("");
-    await invoke("paste_clipboard_item", { id: item.id, plain }).catch(() => {});
+    if (autoPaste) {
+      await invoke("paste_clipboard_item", { id: item.id, plain }).catch(() => {});
+    } else {
+      await invoke("copy_clipboard_item", { id: item.id }).catch(() => {});
+      hide();
+    }
   }
 
   async function togglePinSelected() {
@@ -300,7 +374,16 @@ export default function App() {
     const id = selectedClip.id;
     const pinned = await invoke<boolean>("toggle_pin", { id }).catch(() => null);
     if (pinned === null) return;
-    setClipItems((list) => list.map((c) => (c.id === id ? { ...c, pinned } : c)));
+    setClipItems((list) => {
+      const reordered = list
+        .map((c) => (c.id === id ? { ...c, pinned } : c))
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.id - a.id);
+      const nextIndex = reordered.findIndex((c) => c.id === id);
+      requestAnimationFrame(() => setIndex(Math.max(0, nextIndex)));
+      return reordered;
+    });
+    // Click nút ghim không được làm mất keyboard navigation của ô search.
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   async function saveAsSnippet(keyword: string) {
@@ -373,6 +456,27 @@ export default function App() {
           hide();
           await invoke("open_url", { url: item.url });
           break;
+        case "kill":
+        case "kill-tree":
+          if (item.pid == null) return;
+          hide();
+          await invoke("kill_process", { pid: item.pid, tree: action.id === "kill-tree" });
+          break;
+        case "copy-pid":
+          if (item.pid != null) await invoke("copy_text", { text: String(item.pid) });
+          hide();
+          break;
+        case "copy-secret":
+          if (item.secret) {
+            if (pwToHistory) await invoke("copy_text", { text: item.secret });
+            else await invoke("copy_secret", { text: item.secret });
+          }
+          hide();
+          break;
+        case "copy-username":
+          if (item.title) await invoke("copy_text", { text: item.title });
+          hide();
+          break;
       }
     } catch (err) {
       console.error("context action lỗi:", err);
@@ -389,7 +493,7 @@ export default function App() {
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Context menu đang mở: điều hướng bên trong menu
     if (ctxOpen && mode === "search") {
-      const item = results[index];
+      const item = visibleResults[index];
       const actions = item ? actionsFor(item) : [];
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -422,7 +526,7 @@ export default function App() {
       !ctxOpen &&
       (e.target as HTMLInputElement).selectionStart === query.length
     ) {
-      const item = results[index];
+      const item = visibleResults[index];
       if (item && actionsFor(item).length > 0) {
         e.preventDefault();
         setCtxOpen(true);
@@ -441,7 +545,7 @@ export default function App() {
       e.preventDefault();
       // Enter = dán nguyên bản, Shift+Enter = dán plain text (plan.md)
       if (mode === "clipboard") void pasteClip(e.shiftKey);
-      else if (results[index]) void execute(results[index]);
+      else if (visibleResults[index]) void execute(visibleResults[index]);
     } else if (e.key === "Escape") {
       e.preventDefault();
       if (snipOpen) setSnipOpen(false);
@@ -467,7 +571,7 @@ export default function App() {
       if (mode === "clipboard") {
         textareaRef.current?.focus();
       } else {
-        const it = results[index];
+        const it = visibleResults[index];
         if (it && ["app", "file", "folder"].includes(it.kind)) setQuery(it.title);
       }
     } else if (mode === "clipboard" && e.ctrlKey && e.key.toLowerCase() === "e") {
@@ -483,7 +587,7 @@ export default function App() {
         .catch(() => {});
     } else if (mode === "search" && e.ctrlKey && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
-      const it = results[parseInt(e.key, 10) - 1];
+      const it = visibleResults[parseInt(e.key, 10) - 1];
       if (it) void execute(it);
     }
   };
@@ -498,15 +602,11 @@ export default function App() {
                  border border-black/10 dark:border-white/10
                  ${mode !== "search" ? "h-screen" : ""}`}
     >
-      {mode === "settings" ? (
-        <SettingsView onClose={hide} />
-      ) : (
-        <>
       <SearchBar
         ref={inputRef}
         value={query}
         mode={mode}
-        onChange={setQuery}
+        onChange={(value) => { setOcrItem(undefined); setQuery(value); }}
         onKeyDown={onKeyDown}
       />
 
@@ -515,7 +615,7 @@ export default function App() {
           <div className={showKnowledge ? "flex h-[414px]" : ""}>
             <div className={showKnowledge ? "w-[360px] shrink-0 overflow-hidden" : ""}>
               <ResultList
-                items={results}
+                items={visibleResults}
                 selectedIndex={index}
                 onExecute={(it) => void execute(it)}
                 onHover={setIndex}
@@ -529,15 +629,25 @@ export default function App() {
                 onOpen={() => {
                   if (selectedResult.url) void invoke("open_url", { url: selectedResult.url });
                 }}
+                onSave={() => void invoke("save_study_word", {
+                  word: selectedResult.keyword,
+                  translation: selectedResult.text,
+                  details: selectedResult.preview || "",
+                })}
+                onTranslate={() => {
+                  const text = selectedResult.text || "";
+                  setOcrItem(undefined);
+                  setQuery(text ? `${kw.translate} ${text}` : `${kw.translate} `);
+                }}
               />
             )}
           </div>
-          {ctxOpen && results[index] && (
+          {ctxOpen && visibleResults[index] && (
             <ContextMenu
-              item={results[index]}
-              actions={actionsFor(results[index])}
+              item={visibleResults[index]}
+              actions={actionsFor(visibleResults[index])}
               selectedIndex={ctxIndex}
-              onRun={(a) => void runCtxAction(results[index], a)}
+              onRun={(a) => void runCtxAction(visibleResults[index], a)}
               onHover={setCtxIndex}
             />
           )}
@@ -563,14 +673,14 @@ export default function App() {
         />
       )}
 
-      {(mode === "clipboard" || results.length > 0) && (
+      {(mode === "clipboard" || visibleResults.length > 0) && (
         <div
           className="flex items-center justify-between px-4 py-1.5 shrink-0
                      border-t border-black/5 dark:border-white/10
                      text-[10.5px] text-zinc-400 dark:text-zinc-500"
         >
           <span>
-            WinSpot
+            HeaSpot
             {mode === "search" && (
               <span className="ml-2 opacity-70">
                 engine: {engine === "everything" ? "Everything ⚡" : "Index nội bộ"}
@@ -583,8 +693,6 @@ export default function App() {
               : "↑↓ chọn · Enter mở · → menu · Tab điền · Esc đóng"}
           </span>
         </div>
-      )}
-        </>
       )}
     </motion.div>
   );

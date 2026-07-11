@@ -11,7 +11,6 @@ pub fn prev_foreground() -> isize {
 const WINDOW_WIDTH: f64 = 680.0;
 const CLIPBOARD_WIDTH: f64 = 900.0;
 const CLIPBOARD_HEIGHT: f64 = 520.0;
-const SETTINGS_HEIGHT: f64 = 560.0;
 const BAR_HEIGHT: f64 = 72.0;
 
 /// Đặt cửa sổ giữa màn hình theo chiều ngang, cao 18% từ mép trên.
@@ -44,14 +43,19 @@ fn recenter_x(win: &WebviewWindow, logical_w: f64) {
     }
 }
 
-/// Hiện / ẩn cửa sổ chính. `mode` = "search" | "clipboard"
+/// Hiện / ẩn cửa sổ chính. `mode` = "search" | "clipboard".
 pub fn toggle(app: &AppHandle, mode: &str) {
+    toggle_with(app, mode, "");
+}
+
+/// Như `toggle` nhưng mở launcher với sẵn một đoạn text (prefill trigger keyword).
+pub fn toggle_with(app: &AppHandle, mode: &str, prefill: &str) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
     let visible = win.is_visible().unwrap_or(false);
 
-    if visible && mode == "search" {
+    if visible && mode == "search" && prefill.is_empty() {
         let _ = win.hide();
         let _ = app.emit("winspot://hidden", ());
         trim_memory();
@@ -69,8 +73,6 @@ pub fn toggle(app: &AppHandle, mode: &str) {
         if !visible {
             let (w, h) = if mode == "clipboard" {
                 (CLIPBOARD_WIDTH, CLIPBOARD_HEIGHT)
-            } else if mode == "settings" {
-                (CLIPBOARD_WIDTH, SETTINGS_HEIGHT)
             } else {
                 (WINDOW_WIDTH, BAR_HEIGHT)
             };
@@ -79,7 +81,8 @@ pub fn toggle(app: &AppHandle, mode: &str) {
         }
         // KHÔNG show ngay: frontend reset UI về trạng thái opacity 0 xong
         // sẽ tự gọi win.show() -> không còn khung hình cũ lóe lên (hết giật)
-        let _ = app.emit("winspot://prepare", mode);
+        let payload = serde_json::json!({ "mode": mode, "prefill": prefill });
+        let _ = app.emit("winspot://prepare", payload);
 
         // Phòng hờ frontend chưa sẵn sàng (mới khởi động): show sau 350ms
         let win2 = win.clone();
@@ -91,6 +94,20 @@ pub fn toggle(app: &AppHandle, mode: &str) {
             }
         });
     }
+}
+
+/// Mở cửa sổ Cài đặt (cửa sổ Windows riêng, có viền, hiện trên taskbar)
+pub fn open_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+#[tauri::command]
+pub fn open_settings_window(app: AppHandle) {
+    open_settings(&app);
 }
 
 /// Giải phóng RAM khi app bị ẩn (working set trim)
@@ -130,7 +147,7 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let show = MenuItem::with_id(app, "show", "Mở WinSpot", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Mở HeaSpot", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Cài đặt…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
@@ -139,10 +156,10 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("WinSpot")
+        .tooltip("HeaSpot")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => toggle(app, "search"),
-            "settings" => toggle(app, "settings"),
+            "settings" => open_settings(app),
             "quit" => app.exit(0),
             _ => {}
         })

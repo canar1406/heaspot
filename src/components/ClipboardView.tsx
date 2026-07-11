@@ -77,7 +77,7 @@ export function ClipboardView({
   if (items.length === 0) {
     return (
       <div className="flex-1 min-h-0 flex items-center justify-center border-t border-black/5 dark:border-white/10 text-[13px] text-zinc-400 dark:text-zinc-500">
-        Chưa có gì trong clipboard history — cứ copy như bình thường, WinSpot sẽ ghi nhớ
+        Chưa có gì trong clipboard history — cứ copy như bình thường, HeaSpot sẽ ghi nhớ
       </div>
     );
   }
@@ -143,8 +143,13 @@ export function ClipboardView({
               </div>
             </div>
             {c.pinned && (
-              <span className={i === selectedIndex ? "text-amber-200" : "text-amber-500"}>
-                ●
+              <span
+                title="Đã ghim"
+                className={`flex items-center justify-center w-5 h-5 rounded ${i === selectedIndex ? "text-amber-200 bg-white/10" : "text-amber-600 bg-amber-500/10"}`}
+              >
+                <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
+                  <path d="M16 3a1 1 0 0 1 .8 1.6L15.2 7H17a1 1 0 0 1 .8 1.6L15 12.33V16l1.7 1.7a1 1 0 0 1-.7 1.7h-3v2.1a1 1 0 1 1-2 0v-2.1H8a1 1 0 0 1-.7-1.7L9 16v-3.67L6.2 8.6A1 1 0 0 1 7 7h1.8L7.2 4.6A1 1 0 0 1 8 3h8Z" />
+                </svg>
               </span>
             )}
             {i < 9 && (
@@ -172,15 +177,23 @@ export function ClipboardView({
                   ? "Link"
                   : "Text"}
           </span>
-          <span
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={onTogglePin}
             title="Ghim / bỏ ghim (Ctrl+P)"
-            className={`cursor-pointer normal-case ${
-              sel?.pinned ? "text-amber-500" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"
+            aria-pressed={!!sel?.pinned}
+            className={`normal-case inline-flex items-center gap-1 px-2 py-1 rounded-md border transition-colors ${
+              sel?.pinned
+                ? "text-amber-700 dark:text-amber-300 bg-amber-500/15 border-amber-500/35"
+                : "text-zinc-500 dark:text-zinc-300 bg-black/[.03] dark:bg-white/[.06] border-black/10 dark:border-white/10 hover:text-amber-600 hover:border-amber-500/30"
             }`}
           >
-            📌{sel?.pinned ? " đã ghim" : ""}
-          </span>
+            <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
+              <path d="M16 3a1 1 0 0 1 .8 1.6L15.2 7H17a1 1 0 0 1 .8 1.6L15 12.33V16l1.7 1.7a1 1 0 0 1-.7 1.7h-3v2.1a1 1 0 1 1-2 0v-2.1H8a1 1 0 0 1-.7-1.7L9 16v-3.67L6.2 8.6A1 1 0 0 1 7 7h1.8L7.2 4.6A1 1 0 0 1 8 3h8Z" />
+            </svg>
+            {sel?.pinned ? "Đã ghim" : "Ghim"}
+          </button>
           <span>·</span>
           <span>{sel?.created_at}</span>
           {sel?.kind !== "image" && (

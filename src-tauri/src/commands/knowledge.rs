@@ -21,6 +21,10 @@ pub struct TranslationHit {
     pub source_language: String,
     pub target_language: String,
     pub phonetic: String,
+    pub audio_url: String,
+    pub collocations: Vec<String>,
+    pub synonyms: Vec<String>,
+    pub antonyms: Vec<String>,
     pub entries: Vec<TranslationEntry>,
 }
 
@@ -85,13 +89,20 @@ try {
   $translated = [string](($tr[0] | ForEach-Object { $_[0] }) -join '')
   $lookup = if ($detected -eq 'en') { $env:WINSPOT_TRANSLATE_QUERY.Trim() } elseif ($target -eq 'en') { $translated.Trim() } else { '' }
   $phonetic = ''
+  $audio = ''
+  $collocations = @()
+  $synonyms = @()
+  $antonyms = @()
   $entries = @()
   if ($lookup -match '^[A-Za-z][A-Za-z''-]*$') {
     try {
       $du = 'https://api.dictionaryapi.dev/api/v2/entries/en/' + [uri]::EscapeDataString($lookup)
       $dict = Invoke-RestMethod -Uri $du -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 8
       $phonetic = [string]$dict[0].phonetic
+      $audio = [string](@($dict[0].phonetics | Where-Object { $_.audio } | Select-Object -First 1).audio)
       foreach ($meaning in @($dict[0].meanings)) {
+        $synonyms += @($meaning.synonyms)
+        $antonyms += @($meaning.antonyms)
         foreach ($def in @($meaning.definitions | Select-Object -First 2)) {
           if ($entries.Count -ge 6) { break }
           $en = [string]$def.definition
@@ -103,9 +114,18 @@ try {
             definition_vi = $vi
             example = [string]$def.example
           }
+          $synonyms += @($def.synonyms)
+          $antonyms += @($def.antonyms)
         }
         if ($entries.Count -ge 6) { break }
       }
+      try {
+        $encoded = [uri]::EscapeDataString($lookup)
+        $right = Invoke-RestMethod -Uri "https://api.datamuse.com/words?lc=$encoded&sp=*&max=6" -TimeoutSec 6
+        $left = Invoke-RestMethod -Uri "https://api.datamuse.com/words?rc=$encoded&sp=*&max=6" -TimeoutSec 6
+        $collocations += @($right | ForEach-Object { "$lookup $($_.word)" })
+        $collocations += @($left | ForEach-Object { "$($_.word) $lookup" })
+      } catch {}
     } catch {}
   }
   [pscustomobject]@{
@@ -113,6 +133,10 @@ try {
     source_language = $detected
     target_language = $target
     phonetic = $phonetic
+    audio_url = $audio
+    collocations = @($collocations | Where-Object { $_ } | Select-Object -Unique -First 10)
+    synonyms = @($synonyms | Where-Object { $_ } | Select-Object -Unique -First 12)
+    antonyms = @($antonyms | Where-Object { $_ } | Select-Object -Unique -First 12)
     entries = @($entries)
   } | ConvertTo-Json -Compress -Depth 6
 } catch { '{}' }
@@ -130,11 +154,19 @@ try {
             definition_vi: e.get("definition_vi").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             example: e.get("example").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         }).collect();
+    let strings = |key: &str| -> Vec<String> {
+        v.get(key).and_then(|x| x.as_array()).cloned().unwrap_or_default()
+            .into_iter().filter_map(|x| x.as_str().map(str::to_string)).collect()
+    };
     Ok(TranslationHit {
         translation,
         source_language: v.get("source_language").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
         target_language: v.get("target_language").and_then(|x| x.as_str()).unwrap_or("vi").to_string(),
         phonetic: v.get("phonetic").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        audio_url: v.get("audio_url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        collocations: strings("collocations"),
+        synonyms: strings("synonyms"),
+        antonyms: strings("antonyms"),
         entries,
     })
 }

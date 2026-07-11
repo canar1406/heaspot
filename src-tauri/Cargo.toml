@@ -1,11 +1,11 @@
 [package]
-name = "winspot"
-version = "0.1.1"
-description = "WinSpot - Spotlight/Alfred cho Windows"
+name = "heaspot"
+version = "0.1.2"
+description = "HeaSpot - Spotlight/Alfred cho Windows"
 edition = "2021"
 
 [lib]
-name = "winspot_lib"
+name = "heaspot_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -24,6 +24,7 @@ base64 = "0.22"
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
+aes-gcm = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 plist = "1"
 walkdir = "2"
@@ -47,6 +48,9 @@ features = [
     "Win32_System_ProcessStatus",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
 ]
 
 [profile.release]

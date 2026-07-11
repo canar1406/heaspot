@@ -35,14 +35,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Mất focus -> tự ẩn (hành vi giống Spotlight)
-            if let tauri::WindowEvent::Focused(false) = event {
-                if window.label() == "main" {
+            match event {
+                // Cửa sổ chính mất focus -> tự ẩn (hành vi giống Spotlight)
+                tauri::WindowEvent::Focused(false) if window.label() == "main" => {
                     use tauri::Emitter;
                     let _ = window.hide();
                     let _ = window.emit("winspot://hidden", ());
                     crate::core::window::trim_memory();
                 }
+                // Đóng cửa sổ Settings -> chỉ ẩn để mở lại được (không thoát app)
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "settings" => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -53,8 +59,11 @@ pub fn run() {
             commands::capacities::capacities_has_token,
             commands::knowledge::wikipedia_search,
             commands::knowledge::translate_lookup,
+            commands::ocr::capture_ocr,
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::study::save_study_word,
+            commands::study::get_study_words,
             commands::system::system_command,
             commands::system::run_in_terminal,
             commands::system::open_path,
@@ -72,6 +81,10 @@ pub fn run() {
             plugins::registry::registry_search,
             plugins::registry::open_regedit,
             plugins::generator::hash_text,
+            plugins::processes::list_processes,
+            plugins::processes::kill_process,
+            plugins::passwords::list_passwords,
+            plugins::passwords::copy_secret,
             plugins::workflows::list_workflows,
             plugins::workflows::rescan_workflows,
             plugins::workflows::install_workflow,
@@ -90,6 +103,7 @@ pub fn run() {
             commands::snippets::delete_snippet,
             crate::core::window::resize_window,
             crate::core::window::hide_and_trim,
+            crate::core::window::open_settings_window,
         ])
         .run(tauri::generate_context!())
         .expect("lỗi khi khởi chạy WinSpot");

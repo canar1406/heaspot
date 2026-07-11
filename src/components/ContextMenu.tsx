@@ -49,6 +49,21 @@ export function actionsFor(item: ResultItemData): CtxAction[] {
         { id: "open", label: "Mở trong Registry Editor" },
         { id: "copy-path", label: "Copy đường dẫn key" },
       ];
+    case "process":
+      return [
+        { id: "kill", label: "Kill tiến trình (mạnh)" },
+        { id: "kill-tree", label: "Kill cả cây tiến trình con" },
+        ...(item.path ? [{ id: "open-location", label: "Mở vị trí file" }] : []),
+        { id: "copy-pid", label: "Copy PID" },
+      ];
+    case "password":
+      return item.secret
+        ? [
+            { id: "copy-secret", label: "Copy mật khẩu" },
+            { id: "copy-username", label: "Copy username" },
+            ...(item.url ? [{ id: "open-source", label: "Mở trang web" }] : []),
+          ]
+        : [];
     case "knowledge":
       return [
         { id: "paste-text", label: "Dán nội dung vào ứng dụng trước" },

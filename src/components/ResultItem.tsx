@@ -14,6 +14,7 @@ const ICON_BG: Partial<Record<ResultItemData["kind"], string>> = {
   fulltext: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
   knowledge: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
   settings: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
+  "ocr-cmd": "bg-violet-500/15 text-violet-600 dark:text-violet-400",
   capacities: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
   "cap-token": "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
   clipboard: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
@@ -27,6 +28,8 @@ const ICON_BG: Partial<Record<ResultItemData["kind"], string>> = {
   url: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
   workflow: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400",
   "wf-cmd": "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400",
+  process: "bg-red-500/15 text-red-600 dark:text-red-400",
+  password: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
 };
 
 interface Props {

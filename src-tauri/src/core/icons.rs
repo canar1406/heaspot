@@ -5,11 +5,29 @@ use base64::Engine;
 use std::ffi::c_void;
 
 pub fn extract_icon_data_url(path: &str) -> Option<String> {
+    ensure_com();
     let png = unsafe { extract_png(path) }?;
     Some(format!(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(png)
     ))
+}
+
+thread_local! {
+    static COM_INIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// SHGetFileInfoW cần COM (nhất là để resolve .lnk) — khởi tạo 1 lần mỗi thread.
+fn ensure_com() {
+    COM_INIT.with(|c| {
+        if !c.get() {
+            unsafe {
+                use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+                CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as _);
+            }
+            c.set(true);
+        }
+    });
 }
 
 unsafe fn extract_png(path: &str) -> Option<Vec<u8>> {
