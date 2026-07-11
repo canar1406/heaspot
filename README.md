@@ -69,6 +69,12 @@ Trong tab **Keyword & Hotkey tính năng**, click ô Hotkey rồi nhấn tổ h�
 - Nếu không có selection, HeaSpot mở sẵn keyword để nhập tiếp.
 - HeaSpot copy selection tạm thời, khóa clipboard watcher và khôi phục clipboard text/ảnh cũ trước khi mở cửa sổ; không tự Enter/chạy hành động nguy hiểm.
 
+### OCR tiếng Việt
+
+Gõ `ocr` hoặc gán hotkey riêng để chụp một vùng màn hình. HeaSpot tiền xử lý ảnh (phóng to chữ nhỏ, tăng tương phản và làm nét), sau đó ưu tiên **Tesseract 5 với model `vie+eng`**; không fallback âm thầm sang model tiếng Anh vì sẽ làm sai dấu. OCR chạy offline và không giữ ảnh tạm sau khi nhận dạng.
+
+HeaSpot tìm Tesseract trong `Program Files`, thư mục cài theo user hoặc đường dẫn `HEASPOT_TESSERACT_PATH`. Model `vie.traineddata` nằm trong `Tesseract-OCR\tessdata`; nếu thiếu engine/model, preview sẽ báo rõ thay vì trả về văn bản sai dấu. Windows Media OCR chỉ làm fallback khi hệ thống thực sự có recognizer `vi-*`.
+
 ## Tính năng nhạy cảm (mặc định TẮT)
 
 - **Mật khẩu trình duyệt** (`pw`): đọc mật khẩu đã lưu trong Edge/Chrome/Brave/Cốc Cốc… của **chính tài khoản Windows đang đăng nhập** (giải mã DPAPI + AES-GCM, giống tính năng Export passwords của trình duyệt). Chỉ hoạt động cục bộ. Khi copy, mật khẩu **không lưu vào clipboard history** (có toggle riêng để đổi).
