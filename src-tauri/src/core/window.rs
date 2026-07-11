@@ -11,6 +11,7 @@ pub fn prev_foreground() -> isize {
 const WINDOW_WIDTH: f64 = 680.0;
 const CLIPBOARD_WIDTH: f64 = 900.0;
 const CLIPBOARD_HEIGHT: f64 = 520.0;
+const SETTINGS_HEIGHT: f64 = 560.0;
 const BAR_HEIGHT: f64 = 72.0;
 
 /// Đặt cửa sổ giữa màn hình theo chiều ngang, cao 18% từ mép trên.
@@ -68,6 +69,8 @@ pub fn toggle(app: &AppHandle, mode: &str) {
         if !visible {
             let (w, h) = if mode == "clipboard" {
                 (CLIPBOARD_WIDTH, CLIPBOARD_HEIGHT)
+            } else if mode == "settings" {
+                (CLIPBOARD_WIDTH, SETTINGS_HEIGHT)
             } else {
                 (WINDOW_WIDTH, BAR_HEIGHT)
             };
@@ -127,17 +130,19 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let show = MenuItem::with_id(app, "show", "Mở WinSpot (Alt+Space)", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Mở WinSpot", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Cài đặt…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 
     TrayIconBuilder::with_id("winspot-tray")
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("WinSpot — Alt+Space")
+        .tooltip("WinSpot")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => toggle(app, "search"),
+            "settings" => toggle(app, "settings"),
             "quit" => app.exit(0),
             _ => {}
         })

@@ -6,6 +6,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { ResultList } from "./components/ResultList";
 import { ClipboardView } from "./components/ClipboardView";
+import { KnowledgePreview } from "./components/KnowledgePreview";
+import { SettingsView } from "./components/SettingsView";
 import { actionsFor, ContextMenu, type CtxAction } from "./components/ContextMenu";
 import { useKeyboardNav } from "./hooks/useKeyboardNav";
 import { useSearch } from "./hooks/useSearch";
@@ -29,9 +31,11 @@ export default function App() {
 
   const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey);
 
-  const navItems: unknown[] = mode === "clipboard" ? clipItems : results;
+  const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" ? results : [];
   const { index, setIndex, move } = useKeyboardNav(navItems);
   const selectedClip = mode === "clipboard" ? clipItems[index] : undefined;
+  const selectedResult = mode === "search" ? results[index] : undefined;
+  const showKnowledge = selectedResult?.kind === "knowledge";
   const dirty = !!selectedClip && draft !== selectedClip.content;
 
   // Nạp nội dung item được chọn vào khung edit
@@ -85,7 +89,7 @@ export default function App() {
   // Thứ tự chống giật: reset UI về opacity 0 TRƯỚC -> show cửa sổ -> chạy animation.
   useEffect(() => {
     const unlisten = listen<string>("winspot://prepare", (e) => {
-      setMode(e.payload === "clipboard" ? "clipboard" : "search");
+      setMode(e.payload === "clipboard" ? "clipboard" : e.payload === "settings" ? "settings" : "search");
       setQuery("");
       setIndex(0);
       setRefreshKey((k) => k + 1);
@@ -143,10 +147,18 @@ export default function App() {
       apply(900, 520);
       return;
     }
+    if (mode === "settings") {
+      apply(900, 560);
+      return;
+    }
+    if (showKnowledge) {
+      apply(900, 520);
+      return;
+    }
     const el = panelRef.current;
     if (!el) return;
     apply(680, Math.max(Math.min(Math.round(el.scrollHeight), 640), 72));
-  }, [results.length, mode]);
+  }, [results.length, mode, showKnowledge]);
 
   const hide = () => {
     setQuery("");
@@ -210,6 +222,9 @@ export default function App() {
           if (item.text) await invoke("copy_text", { text: item.text });
           hide();
           break;
+        case "knowledge":
+          if (item.text) await invoke("paste_text", { text: item.text });
+          break;
         case "url":
           if (!item.url) return;
           hide();
@@ -250,6 +265,10 @@ export default function App() {
           });
           setQuery(";");
           setRefreshKey((k) => k + 1);
+          break;
+        case "settings":
+          setQuery("");
+          setMode("settings");
           break;
       }
     } catch (err) {
@@ -322,6 +341,11 @@ export default function App() {
           hide();
           await invoke("run_in_terminal", { command: `"${item.path}"` });
           break;
+        case "uninstall":
+          if (!item.path) return;
+          hide();
+          await invoke("uninstall_app", { title: item.title, path: item.path });
+          break;
         case "open-terminal-here":
           if (!item.path) return;
           hide();
@@ -340,6 +364,14 @@ export default function App() {
         case "copy-text":
           if (item.text) await invoke("copy_text", { text: item.text });
           hide();
+          break;
+        case "paste-text":
+          if (item.text) await invoke("paste_text", { text: item.text });
+          break;
+        case "open-source":
+          if (!item.url) return;
+          hide();
+          await invoke("open_url", { url: item.url });
           break;
       }
     } catch (err) {
@@ -447,7 +479,7 @@ export default function App() {
     } else if (mode === "clipboard" && e.ctrlKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
       invoke("clear_clipboard_history")
-        .then(() => setClipItems([]))
+        .then(() => setRefreshKey((k) => k + 1))
         .catch(() => {});
     } else if (mode === "search" && e.ctrlKey && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
@@ -464,8 +496,12 @@ export default function App() {
       className={`relative flex flex-col rounded-2xl overflow-hidden
                  bg-white/95 dark:bg-zinc-900/95
                  border border-black/10 dark:border-white/10
-                 ${mode === "clipboard" ? "h-screen" : ""}`}
+                 ${mode !== "search" ? "h-screen" : ""}`}
     >
+      {mode === "settings" ? (
+        <SettingsView onClose={hide} />
+      ) : (
+        <>
       <SearchBar
         ref={inputRef}
         value={query}
@@ -476,12 +512,26 @@ export default function App() {
 
       {mode === "search" ? (
         <>
-          <ResultList
-            items={results}
-            selectedIndex={index}
-            onExecute={(it) => void execute(it)}
-            onHover={setIndex}
-          />
+          <div className={showKnowledge ? "flex h-[414px]" : ""}>
+            <div className={showKnowledge ? "w-[360px] shrink-0 overflow-hidden" : ""}>
+              <ResultList
+                items={results}
+                selectedIndex={index}
+                onExecute={(it) => void execute(it)}
+                onHover={setIndex}
+              />
+            </div>
+            {showKnowledge && selectedResult && (
+              <KnowledgePreview
+                item={selectedResult}
+                onPaste={() => void invoke("paste_text", { text: selectedResult.text })}
+                onCopy={() => void invoke("copy_text", { text: selectedResult.text })}
+                onOpen={() => {
+                  if (selectedResult.url) void invoke("open_url", { url: selectedResult.url });
+                }}
+              />
+            )}
+          </div>
           {ctxOpen && results[index] && (
             <ContextMenu
               item={results[index]}
@@ -533,6 +583,8 @@ export default function App() {
               : "↑↓ chọn · Enter mở · → menu · Tab điền · Esc đóng"}
           </span>
         </div>
+      )}
+        </>
       )}
     </motion.div>
   );

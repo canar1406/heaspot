@@ -16,6 +16,7 @@ export function actionsFor(item: ResultItemData): CtxAction[] {
         { id: "open-location", label: "Open file location" },
         { id: "copy-path", label: "Copy path" },
         { id: "run-terminal", label: "Run in Terminal" },
+        { id: "uninstall", label: "Gỡ cài đặt…" },
       ];
     case "file":
     case "fulltext":
@@ -47,6 +48,12 @@ export function actionsFor(item: ResultItemData): CtxAction[] {
       return [
         { id: "open", label: "Mở trong Registry Editor" },
         { id: "copy-path", label: "Copy đường dẫn key" },
+      ];
+    case "knowledge":
+      return [
+        { id: "paste-text", label: "Dán nội dung vào ứng dụng trước" },
+        { id: "copy-text", label: "Copy nội dung" },
+        ...(item.url ? [{ id: "open-source", label: "Mở bài Wikipedia" }] : []),
       ];
     default:
       return item.text

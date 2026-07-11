@@ -21,7 +21,9 @@ export type ResultKind =
   | "time"
   | "url"
   | "workflow"
-  | "wf-cmd";
+  | "wf-cmd"
+  | "knowledge"
+  | "settings";
 
 export interface ResultItemData {
   id: string;
@@ -44,6 +46,7 @@ export interface ResultItemData {
   icon?: string;
   /** window walker: handle cửa sổ */
   hwnd?: number;
+  preview?: string;
 }
 
 export interface OpenWindowInfo {
@@ -99,6 +102,27 @@ export interface CapacitiesHit {
   preview: string;
 }
 
+export interface KnowledgeHit {
+  title: string;
+  extract: string;
+  url: string;
+}
+
+export interface TranslationEntry {
+  part_of_speech: string;
+  definition_en: string;
+  definition_vi: string;
+  example: string;
+}
+
+export interface TranslationHit {
+  translation: string;
+  source_language: string;
+  target_language: string;
+  phonetic: string;
+  entries: TranslationEntry[];
+}
+
 export interface BackendSearchResponse {
   results: BackendSearchResult[];
   engine: "everything" | "internal";
@@ -127,4 +151,13 @@ export interface ClipItem {
   thumb: string;
 }
 
-export type UiMode = "search" | "clipboard";
+export interface AppSettings {
+  search_hotkey: string;
+  clipboard_hotkey: string;
+  max_clipboard_items: number;
+  clipboard_retention_days: number;
+  privacy_apps: string;
+  launch_at_startup: boolean;
+}
+
+export type UiMode = "search" | "clipboard" | "settings";

@@ -55,6 +55,9 @@ function fmt(v: number): string {
 }
 
 export function tryConvert(q: string): ResultItemData | null {
+  const data = tryDataConvert(q);
+  if (data) return data;
+
   const m = /^([\d.,]+)\s*([a-zA-Z°µ"']+)\s+(?:to|sang|ra|=)\s+([a-zA-Z°µ"']+)$/i.exec(q.trim());
   if (!m) return null;
   const value = parseFloat(m[1].replace(/,/g, ""));
@@ -83,4 +86,62 @@ export function tryConvert(q: string): ResultItemData | null {
     kind: "unit",
     text: fmt(out),
   };
+}
+
+type DataBase = "bin" | "dec" | "hex" | "ascii";
+
+function dataBase(raw: string): DataBase | null {
+  const v = raw.toLowerCase();
+  if (["bin", "binary", "base2"].includes(v)) return "bin";
+  if (["dec", "decimal", "base10"].includes(v)) return "dec";
+  if (["hex", "hexadecimal", "base16"].includes(v)) return "hex";
+  if (["ascii", "text", "string"].includes(v)) return "ascii";
+  return null;
+}
+
+function parseBytes(value: string, from: Exclude<DataBase, "ascii">): number[] | null {
+  const cleaned = value.trim().replace(/0x/gi, "").replace(/0b/gi, "");
+  const tokens = cleaned.split(/[\s,]+/).filter(Boolean);
+  const radix = from === "bin" ? 2 : from === "hex" ? 16 : 10;
+  const valid = from === "bin" ? /^[01]+$/ : from === "hex" ? /^[0-9a-f]+$/i : /^\d+$/;
+  if (!tokens.length || tokens.some((t) => !valid.test(t))) return null;
+  const bytes = tokens.map((t) => parseInt(t, radix));
+  return bytes.every((b) => Number.isInteger(b) && b >= 0 && b <= 255) ? bytes : null;
+}
+
+function tryDataConvert(raw: string): ResultItemData | null {
+  const q = raw.trim();
+  const names = "bin|binary|base2|dec|decimal|base10|hex|hexadecimal|base16|ascii|text|string";
+  let fromRaw = "", toRaw = "", value = "";
+  let m = new RegExp(`^(${names})\\s+(.+?)\\s+(?:to|sang|ra|=)\\s+(${names})$`, "i").exec(q);
+  if (m) [, fromRaw, value, toRaw] = m;
+  else {
+    m = new RegExp(`^(.+?)\\s+(${names})\\s+(?:to|sang|ra|=)\\s+(${names})$`, "i").exec(q);
+    if (m) [, value, fromRaw, toRaw] = m;
+  }
+  if (!m) {
+    const p = new RegExp(`^(0x[0-9a-f]+|0b[01]+)\\s+(?:to|sang|ra|=)\\s+(${names})$`, "i").exec(q);
+    if (!p) return null;
+    value = p[1]; fromRaw = /^0x/i.test(value) ? "hex" : "bin"; toRaw = p[2];
+  }
+  const from = dataBase(fromRaw), to = dataBase(toRaw);
+  if (!from || !to || from === to || !value) return null;
+
+  let bytes = from === "ascii" ? Array.from(new TextEncoder().encode(value)) : parseBytes(value, from);
+  if (!bytes && from !== "ascii" && to !== "ascii" && !/[\s,]/.test(value.trim())) {
+    const normalized = value.replace(/^0x|^0b/i, "");
+    const valid = from === "bin" ? /^[01]+$/ : from === "hex" ? /^[0-9a-f]+$/i : /^\d+$/;
+    if (!valid.test(normalized)) return null;
+    try {
+      const n = from === "bin" ? BigInt(`0b${normalized}`) : from === "hex" ? BigInt(`0x${normalized}`) : BigInt(normalized);
+      const result = to === "bin" ? n.toString(2) : to === "hex" ? n.toString(16).toUpperCase() : n.toString(10);
+      return { id: `data:${q}`, title: result, subtitle: `${from.toUpperCase()} → ${to.toUpperCase()} — Enter để copy`, kind: "unit", text: result };
+    } catch { return null; }
+  }
+  if (!bytes) return null;
+  const result = to === "ascii" ? new TextDecoder().decode(Uint8Array.from(bytes))
+    : to === "hex" ? bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ")
+    : to === "bin" ? bytes.map((b) => b.toString(2).padStart(8, "0")).join(" ")
+    : bytes.join(" ");
+  return { id: `data:${q}`, title: result, subtitle: `${from.toUpperCase()} → ${to.toUpperCase()} — Enter để copy`, kind: "unit", text: result };
 }

@@ -1,0 +1,140 @@
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct KnowledgeHit {
+    pub title: String,
+    pub extract: String,
+    pub url: String,
+}
+
+#[derive(Serialize)]
+pub struct TranslationEntry {
+    pub part_of_speech: String,
+    pub definition_en: String,
+    pub definition_vi: String,
+    pub example: String,
+}
+
+#[derive(Serialize)]
+pub struct TranslationHit {
+    pub translation: String,
+    pub source_language: String,
+    pub target_language: String,
+    pub phonetic: String,
+    pub entries: Vec<TranslationEntry>,
+}
+
+/// Tra cứu Wikipedia tiếng Việt và trả phần mở đầu dạng plain text.
+#[tauri::command]
+pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let script = r#"
+try {
+  $q = [uri]::EscapeDataString($env:WINSPOT_WIKI_QUERY)
+  $uri = "https://vi.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$q&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url&format=json&utf8=1"
+  $h = @{ 'User-Agent' = 'WinSpot/0.1 desktop launcher' }
+  $r = Invoke-RestMethod -Uri $uri -Headers $h -Method GET -TimeoutSec 10
+  $out = @($r.query.pages.PSObject.Properties.Value | Sort-Object index | ForEach-Object {
+    [pscustomobject]@{ title = [string]$_.title; extract = [string]$_.extract; url = [string]$_.fullurl }
+  })
+  ConvertTo-Json -InputObject $out -Compress -Depth 4
+} catch { '[]' }
+"#;
+    let stdout = tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::run_hidden_ps(script, &[("WINSPOT_WIKI_QUERY", &q)])
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_default();
+    let items = match value {
+        serde_json::Value::Array(a) => a,
+        obj @ serde_json::Value::Object(_) => vec![obj],
+        _ => vec![],
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|v| {
+            let title = v.get("title")?.as_str()?.to_string();
+            let extract = v.get("extract").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            (!extract.is_empty()).then_some(KnowledgeHit { title, extract, url })
+        })
+        .collect())
+}
+
+/// Smart Translate: dịch tự động; với một từ tiếng Anh còn lấy phonetic, loại từ và định nghĩa.
+#[tauri::command]
+pub async fn translate_lookup(query: String) -> Result<TranslationHit, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() { return Err("nội dung dịch trống".into()); }
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+function GT([string]$text, [string]$sl, [string]$tl) {
+  $e = [uri]::EscapeDataString($text)
+  $u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&dt=t&q=$e"
+  Invoke-RestMethod -Uri $u -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 10
+}
+try {
+  $first = GT $env:WINSPOT_TRANSLATE_QUERY 'auto' 'vi'
+  $detected = [string]$first[2]
+  $target = if ($detected -eq 'vi') { 'en' } else { 'vi' }
+  if ($target -eq 'vi') { $tr = $first } else { $tr = GT $env:WINSPOT_TRANSLATE_QUERY 'auto' $target }
+  $translated = [string](($tr[0] | ForEach-Object { $_[0] }) -join '')
+  $lookup = if ($detected -eq 'en') { $env:WINSPOT_TRANSLATE_QUERY.Trim() } elseif ($target -eq 'en') { $translated.Trim() } else { '' }
+  $phonetic = ''
+  $entries = @()
+  if ($lookup -match '^[A-Za-z][A-Za-z''-]*$') {
+    try {
+      $du = 'https://api.dictionaryapi.dev/api/v2/entries/en/' + [uri]::EscapeDataString($lookup)
+      $dict = Invoke-RestMethod -Uri $du -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 8
+      $phonetic = [string]$dict[0].phonetic
+      foreach ($meaning in @($dict[0].meanings)) {
+        foreach ($def in @($meaning.definitions | Select-Object -First 2)) {
+          if ($entries.Count -ge 6) { break }
+          $en = [string]$def.definition
+          $viResp = GT $en 'en' 'vi'
+          $vi = [string](($viResp[0] | ForEach-Object { $_[0] }) -join '')
+          $entries += [pscustomobject]@{
+            part_of_speech = [string]$meaning.partOfSpeech
+            definition_en = $en
+            definition_vi = $vi
+            example = [string]$def.example
+          }
+        }
+        if ($entries.Count -ge 6) { break }
+      }
+    } catch {}
+  }
+  [pscustomobject]@{
+    translation = $translated
+    source_language = $detected
+    target_language = $target
+    phonetic = $phonetic
+    entries = @($entries)
+  } | ConvertTo-Json -Compress -Depth 6
+} catch { '{}' }
+"#;
+    let stdout = tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::run_hidden_ps(script, &[("WINSPOT_TRANSLATE_QUERY", &q)])
+    }).await.map_err(|e| e.to_string())??;
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| e.to_string())?;
+    let translation = v.get("translation").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if translation.is_empty() { return Err("dịch vụ dịch không trả về kết quả".into()); }
+    let entries = v.get("entries").and_then(|x| x.as_array()).cloned().unwrap_or_default()
+        .into_iter().map(|e| TranslationEntry {
+            part_of_speech: e.get("part_of_speech").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            definition_en: e.get("definition_en").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            definition_vi: e.get("definition_vi").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            example: e.get("example").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        }).collect();
+    Ok(TranslationHit {
+        translation,
+        source_language: v.get("source_language").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
+        target_language: v.get("target_language").and_then(|x| x.as_str()).unwrap_or("vi").to_string(),
+        phonetic: v.get("phonetic").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        entries,
+    })
+}

@@ -11,6 +11,8 @@ import type {
   BackendSearchResponse,
   CapacitiesHit,
   FullTextHit,
+  KnowledgeHit,
+  TranslationHit,
   OpenWindowInfo,
   RegKeyInfo,
   ResultItemData,
@@ -279,6 +281,72 @@ export function useSearch(query: string, refreshKey: number) {
           text: capToken[1],
         },
       ]);
+      return;
+    }
+
+    // "wiki <khái niệm>" / "dict <từ>" — tra cứu nhanh và preview phần mở đầu.
+    const knowledge = /^(?:wiki|dict|dictionary|tudien)\s+(.+)$/i.exec(q);
+    if (knowledge) {
+      const kw = knowledge[1].trim();
+      const t = setTimeout(async () => {
+        try {
+          const hits = await invoke<KnowledgeHit[]>("wikipedia_search", { query: kw });
+          fresh(() => setResults(hits.map((h, i) => ({
+            id: `knowledge:${i}:${h.title}`,
+            title: h.title,
+            subtitle: h.extract.length > 120 ? `${h.extract.slice(0, 120)}…` : h.extract,
+            kind: "knowledge" as const,
+            text: h.extract,
+            preview: h.extract,
+            url: h.url,
+          }))));
+        } catch {
+          fresh(() => setResults([]));
+        }
+      }, 260);
+      return () => clearTimeout(t);
+    }
+
+    // Smart Translate: bản dịch + word forms/định nghĩa song ngữ trong preview.
+    const translate = /^(?:tr|translate|dich)\s+(.+)$/i.exec(q);
+    if (translate) {
+      const text = translate[1].trim();
+      const t = setTimeout(async () => {
+        try {
+          const hit = await invoke<TranslationHit>("translate_lookup", { query: text });
+          const details = hit.entries.map((e, i) => {
+            const example = e.example ? `\n   Ví dụ: ${e.example}` : "";
+            return `${i + 1}. [${e.part_of_speech || "meaning"}] ${e.definition_en}\n   VI: ${e.definition_vi}${example}`;
+          }).join("\n\n");
+          const preview = [
+            `Bản dịch (${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()}):\n${hit.translation}`,
+            hit.phonetic ? `Phát âm: ${hit.phonetic}` : "",
+            details ? `Word forms & meanings:\n${details}` : "",
+          ].filter(Boolean).join("\n\n");
+          fresh(() => setResults([{
+            id: `translate:${text}`,
+            title: hit.translation,
+            subtitle: `${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()} · Enter để dán`,
+            kind: "knowledge",
+            text: hit.translation,
+            preview,
+            action: "translate",
+          }]));
+        } catch (err) {
+          fresh(() => setResults([{
+            id: "translate:error", title: "Không dịch được nội dung", subtitle: String(err),
+            kind: "knowledge", text: "", preview: String(err), action: "translate",
+          }]));
+        }
+      }, 350);
+      return () => clearTimeout(t);
+    }
+
+    if (/^(?:settings?|cai dat)$/i.test(q)) {
+      setResults([{
+        id: "settings", title: "Mở WinSpot Settings",
+        subtitle: "Hotkey · Clipboard · Privacy · Startup", kind: "settings",
+      }]);
       return;
     }
 

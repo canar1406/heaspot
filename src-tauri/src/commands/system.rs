@@ -111,6 +111,61 @@ pub fn open_file_location(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Chạy uninstall entry mà Control Panel sử dụng; fallback mở Programs and Features.
+#[tauri::command]
+pub fn uninstall_app(title: String, path: String) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    if let Some((display, mut command)) = find_uninstall_entry(&title, &path) {
+        let lower = command.to_lowercase();
+        if lower.contains("msiexec") {
+            if let Some(pos) = lower.find("/i") { command.replace_range(pos..pos + 2, "/X"); }
+        }
+        Command::new("cmd").args(["/C", &command]).creation_flags(CREATE_NO_WINDOW)
+            .spawn().map_err(|e| e.to_string())?;
+        return Ok(format!("Đã mở trình gỡ cài đặt của {display}"));
+    }
+    Command::new("control.exe").arg("appwiz.cpl").spawn().map_err(|e| e.to_string())?;
+    Ok("Không xác định được gói chính xác; đã mở Programs and Features".into())
+}
+
+fn find_uninstall_entry(title: &str, app_path: &str) -> Option<(String, String)> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let needle = normalize_app_name(title);
+    let target = app_path.trim_matches('"').to_lowercase();
+    let locations = [
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+    let mut best: Option<(i32, String, String)> = None;
+    for (root, location) in locations {
+        let Ok(key) = RegKey::predef(root).open_subkey(location) else { continue };
+        for child in key.enum_keys().flatten() {
+            let Ok(entry) = key.open_subkey(child) else { continue };
+            let display: String = entry.get_value("DisplayName").unwrap_or_default();
+            let uninstall: String = entry.get_value("UninstallString").unwrap_or_default();
+            if display.is_empty() || uninstall.is_empty() { continue; }
+            let d = normalize_app_name(&display);
+            let icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
+            let install: String = entry.get_value("InstallLocation").unwrap_or_default();
+            let mut score = 0;
+            if d == needle { score += 100; }
+            else if d.contains(&needle) || needle.contains(&d) { score += 65; }
+            let icon_path = icon.trim_matches('"').split(',').next().unwrap_or("").to_lowercase();
+            if !icon_path.is_empty() && target.contains(&icon_path) { score += 50; }
+            if !install.is_empty() && target.starts_with(&install.to_lowercase()) { score += 40; }
+            if score > best.as_ref().map(|x| x.0).unwrap_or(20) { best = Some((score, display, uninstall)); }
+        }
+    }
+    best.map(|(_, display, command)| (display, command))
+}
+
+fn normalize_app_name(value: &str) -> String {
+    value.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
 /// Start / Stop / Restart một Windows Service (chạy PowerShell elevated)
 #[tauri::command]
 pub fn service_action(name: String, action: String) -> Result<(), String> {

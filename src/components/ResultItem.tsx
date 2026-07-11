@@ -12,6 +12,8 @@ const ICON_BG: Partial<Record<ResultItemData["kind"], string>> = {
   snippet: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
   "snippet-add": "bg-violet-500/15 text-violet-600 dark:text-violet-400",
   fulltext: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
+  knowledge: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
+  settings: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
   capacities: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
   "cap-token": "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
   clipboard: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
