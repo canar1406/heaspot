@@ -89,9 +89,14 @@ export function ClipboardView({
       e.preventDefault();
       e.stopPropagation();
       onFocusInput();
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      // Nội dung đang sửa đã tự lưu -> chỉ cần Enter là dán luôn.
+      // Shift+Enter để xuống dòng (soạn nhiều dòng).
+      e.preventDefault();
+      onPaste(false);
     } else if (e.ctrlKey && e.key === "Enter") {
       e.preventDefault();
-      onPaste(e.shiftKey);
+      onPaste(true);
     }
   };
 
@@ -232,7 +237,7 @@ export function ClipboardView({
         )}
 
         <div className="px-4 py-1.5 text-[10px] text-zinc-400 dark:text-zinc-500 border-t border-black/5 dark:border-white/10 shrink-0">
-          Sửa là tự lưu · Ctrl+Enter dán & đóng · Esc quay lại ô tìm kiếm
+          Sửa là tự lưu · Enter dán (⇧Enter xuống dòng) · Esc quay lại ô tìm kiếm
         </div>
       </div>
 
