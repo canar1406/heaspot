@@ -63,6 +63,66 @@ pub fn list_processes(query: String) -> Vec<ProcInfo> {
     out
 }
 
+/// Dev: tìm tiến trình đang chiếm một cổng TCP (parse `netstat -ano`).
+/// Trả về ProcInfo để tái dùng UI process + context menu Kill.
+#[tauri::command]
+pub fn list_port(port: String) -> Vec<ProcInfo> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let want = port.trim();
+    let out = std::process::Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut pids: Vec<(u32, String)> = Vec::new(); // (pid, local_addr:state)
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // TCP  local  foreign  STATE  PID
+        if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        let local = cols[1];
+        let local_port = local.rsplit(':').next().unwrap_or("");
+        // Lọc theo cổng: rỗng = tất cả LISTENING; có số = đúng cổng đó
+        let matches = if want.is_empty() {
+            cols[3].eq_ignore_ascii_case("LISTENING")
+        } else {
+            local_port == want
+        };
+        if !matches {
+            continue;
+        }
+        let Ok(pid) = cols[4].parse::<u32>() else { continue };
+        if pid == 0 || !seen.insert(pid) {
+            continue;
+        }
+        pids.push((pid, format!("{} · {}", local, cols[3])));
+    }
+
+    pids.into_iter()
+        .take(30)
+        .map(|(pid, addr)| {
+            let exe = crate::plugins::window_walker::process_path_of(pid).unwrap_or_default();
+            let name = std::path::Path::new(&exe)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("PID {pid}"));
+            ProcInfo {
+                pid,
+                mem_mb: process_mem_mb(pid),
+                icon: if exe.is_empty() { None } else { crate::core::indexer::icon_for(&exe) },
+                exe,
+                name: format!("{name}  ·  {addr}"),
+            }
+        })
+        .collect()
+}
+
 fn process_mem_mb(pid: u32) -> f64 {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::ProcessStatus::{

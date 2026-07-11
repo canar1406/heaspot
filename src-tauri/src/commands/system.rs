@@ -71,6 +71,13 @@ pub fn copy_text(text: String) -> Result<(), String> {
     cb.set_text(text).map_err(|e| e.to_string())
 }
 
+/// Đọc text hiện có trong clipboard (dùng cho công cụ dev: json, jwt…)
+#[tauri::command]
+pub fn get_clipboard_text() -> Result<String, String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    cb.get_text().map_err(|e| e.to_string())
+}
+
 /// ShellExecuteW với verb "runas" — hiện UAC prompt
 pub(crate) fn shell_execute_runas(file: &str, args: Option<&str>) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;

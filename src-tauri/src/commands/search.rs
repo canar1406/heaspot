@@ -292,10 +292,12 @@ pub async fn fulltext_search(query: String) -> Result<Vec<FullTextHit>, String> 
         .map(|h| h.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|| "C:/Users".into());
 
+    // CONTAINS(System.Search.Contents, ...) -> chỉ tìm trong NỘI DUNG file
+    // (không khớp tên file/app như CONTAINS(*, ...) trước đây gây "app lạ nhảy vào").
     let sql = format!(
         "SELECT TOP 15 System.ItemName, System.ItemPathDisplay, System.Search.AutoSummary \
          FROM SystemIndex \
-         WHERE SCOPE='file:{home}' AND CONTAINS(*, '\"{q}*\"') \
+         WHERE SCOPE='file:{home}' AND CONTAINS(System.Search.Contents, '\"{q}*\"') \
          ORDER BY System.Search.Rank DESC"
     );
 

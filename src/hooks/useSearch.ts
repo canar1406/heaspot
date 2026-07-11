@@ -9,6 +9,7 @@ import { tryWebSearch } from "../plugins/websearch";
 import { matchSystemCommands } from "../plugins/systemCommands";
 import { findFormulas } from "../plugins/formulas";
 import { findChemistry } from "../plugins/chemistry";
+import { buildJsonResults, buildJwtResults } from "../plugins/devtools";
 import { matchWord, type KwMap, DEFAULT_KEYWORDS } from "../keywords";
 import type {
   BackendSearchResponse,
@@ -417,6 +418,47 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
     const sysArg = matchWord(q, kw.system);
     if (sysArg) {
       setResults(matchSystemCommands(sysArg));
+      return;
+    }
+
+    // Dev: "port <số cổng>" — tìm & kill tiến trình chiếm cổng TCP
+    const portArg = kw.port ? matchWord(q, kw.port) : null;
+    if (portArg !== null) {
+      const t = setTimeout(async () => {
+        try {
+          const list = await invoke<ProcInfo[]>("list_port", { port: portArg });
+          fresh(() => setResults(list.length ? list.map((p) => ({
+            id: `proc:${p.pid}`, title: p.name,
+            subtitle: `PID ${p.pid} · ${p.mem_mb.toFixed(1)} MB — → để Kill`,
+            kind: "process" as const, pid: p.pid, path: p.exe || undefined, icon: p.icon ?? undefined,
+          })) : [{
+            id: "port:empty", title: portArg ? `Không có tiến trình nào chiếm cổng ${portArg}` : "Đang lắng nghe cổng nào?",
+            subtitle: portArg ? "Cổng đang trống" : "Gõ số cổng, VD: port 3000", kind: "process", text: "",
+          }]));
+        } catch { fresh(() => setResults([])); }
+      }, 150);
+      return () => clearTimeout(t);
+    }
+
+    // Dev: "json" — format/kiểm tra JSON từ clipboard (hoặc text sau keyword)
+    const jsonArg = kw.json ? matchWord(q, kw.json) : null;
+    if (jsonArg !== null) {
+      if (jsonArg) {
+        setResults(buildJsonResults(jsonArg));
+      } else {
+        const t = setTimeout(async () => {
+          const text = await invoke<string>("get_clipboard_text").catch(() => "");
+          fresh(() => setResults(buildJsonResults(text)));
+        }, 60);
+        return () => clearTimeout(t);
+      }
+      return;
+    }
+
+    // Dev: "jwt <token>" — giải mã JWT
+    const jwtArg = kw.jwt ? matchWord(q, kw.jwt) : null;
+    if (jwtArg !== null) {
+      setResults(buildJwtResults(jwtArg));
       return;
     }
 

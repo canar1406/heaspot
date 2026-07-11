@@ -34,6 +34,10 @@ export const KW_FEATURES: KwFeature[] = [
   { id: "password", label: "Mật khẩu trình duyệt (bật trong Settings)", def: "pw", kind: "word", example: "pw github", group: "Tiện ích" },
   { id: "generator", label: "Tạo UUID / hash / base64", def: "#", kind: "prefix", example: "#uuid", group: "Tiện ích" },
   { id: "snippet", label: "Snippet gõ tắt", def: ";", kind: "prefix", example: ";mail", group: "Tiện ích" },
+  // Dev tools
+  { id: "json", label: "Format / kiểm tra JSON (từ clipboard)", def: "json", kind: "word", example: "json", group: "Tiện ích" },
+  { id: "jwt", label: "Giải mã JWT token", def: "jwt", kind: "word", example: "jwt eyJhbGci…", group: "Tiện ích" },
+  { id: "port", label: "Tìm & kill tiến trình chiếm cổng TCP", def: "port", kind: "word", example: "port 3000", group: "Hệ thống & điều hướng" },
   // Hệ thống & điều hướng
   { id: "process", label: "Task Manager — tiến trình đang chạy", def: "ps", kind: "word", example: "ps chrome", group: "Hệ thống & điều hướng" },
   { id: "system", label: "Lệnh hệ thống (shutdown, lock…)", def: "sys", kind: "word", example: "sys shutdown", group: "Hệ thống & điều hướng" },

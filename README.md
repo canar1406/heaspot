@@ -30,6 +30,9 @@
 | `url github.com` | Mở URL |
 | `#uuid` · `#md5 text` · `#b64 text` | Tạo UUID / hash / base64 |
 | `ps <tên>` | **Task Manager** — gom process trùng tên; Enter/→ bung các PID con |
+| `port 3000` | **Dev**: tìm & Kill tiến trình đang chiếm cổng TCP |
+| `json` | **Dev**: format/minify/kiểm tra JSON trong clipboard |
+| `jwt <token>` | **Dev**: giải mã JWT (header/payload, exp) |
 | `pw <từ khoá>` | **Mật khẩu trình duyệt** đã lưu (bật trong Settings) |
 | `< <tên>` | **Window Walker** — chuyển cửa sổ đang mở |
 | `{ <tên>` | Mở project VS Code gần đây |

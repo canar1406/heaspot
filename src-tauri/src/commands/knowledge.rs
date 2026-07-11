@@ -1,13 +1,15 @@
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct KnowledgeHit {
     pub title: String,
     pub extract: String,
     pub url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TranslationEntry {
     pub part_of_speech: String,
     pub definition_en: String,
@@ -15,7 +17,7 @@ pub struct TranslationEntry {
     pub example: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TranslationHit {
     pub translation: String,
     pub source_language: String,
@@ -69,11 +71,24 @@ try {
         .collect())
 }
 
+/// Cache dịch trong RAM (theo phiên) — tra lại từ cũ là tức thì, không gọi mạng.
+fn translate_cache() -> &'static Mutex<HashMap<String, TranslationHit>> {
+    static C: OnceLock<Mutex<HashMap<String, TranslationHit>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Smart Translate: dịch tự động; với một từ tiếng Anh còn lấy phonetic, loại từ và định nghĩa.
 #[tauri::command]
 pub async fn translate_lookup(query: String) -> Result<TranslationHit, String> {
     let q = query.trim().to_string();
     if q.is_empty() { return Err("nội dung dịch trống".into()); }
+
+    // 1) Cache hit -> trả ngay
+    let key = q.to_lowercase();
+    if let Some(hit) = translate_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hit);
+    }
+
     let script = r#"
 $ErrorActionPreference = 'Stop'
 function GT([string]$text, [string]$sl, [string]$tl) {
@@ -100,29 +115,43 @@ try {
       $dict = Invoke-RestMethod -Uri $du -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 8
       $phonetic = [string]$dict[0].phonetic
       $audio = [string](@($dict[0].phonetics | Where-Object { $_.audio } | Select-Object -First 1).audio)
+      # Gom định nghĩa trước (chưa dịch)
+      $defList = @()
       foreach ($meaning in @($dict[0].meanings)) {
         $synonyms += @($meaning.synonyms)
         $antonyms += @($meaning.antonyms)
         foreach ($def in @($meaning.definitions | Select-Object -First 2)) {
-          if ($entries.Count -ge 6) { break }
-          $en = [string]$def.definition
-          $viResp = GT $en 'en' 'vi'
-          $vi = [string](($viResp[0] | ForEach-Object { $_[0] }) -join '')
-          $entries += [pscustomobject]@{
+          if ($defList.Count -ge 6) { break }
+          $defList += [pscustomobject]@{
             part_of_speech = [string]$meaning.partOfSpeech
-            definition_en = $en
-            definition_vi = $vi
+            definition_en = [string]$def.definition
             example = [string]$def.example
           }
           $synonyms += @($def.synonyms)
           $antonyms += @($def.antonyms)
         }
-        if ($entries.Count -ge 6) { break }
+        if ($defList.Count -ge 6) { break }
+      }
+      # Dịch TẤT CẢ định nghĩa trong 1 request (nối bằng xuống dòng) thay vì 6 request
+      if ($defList.Count -gt 0) {
+        $joined = ($defList | ForEach-Object { $_.definition_en }) -join "`n"
+        $viResp = GT $joined 'en' 'vi'
+        $viFull = [string](($viResp[0] | ForEach-Object { $_[0] }) -join '')
+        $viLines = @($viFull -split "`n")
+        for ($i = 0; $i -lt $defList.Count; $i++) {
+          $vi = if ($i -lt $viLines.Count) { [string]$viLines[$i].Trim() } else { '' }
+          $entries += [pscustomobject]@{
+            part_of_speech = $defList[$i].part_of_speech
+            definition_en = $defList[$i].definition_en
+            definition_vi = $vi
+            example = $defList[$i].example
+          }
+        }
       }
       try {
         $encoded = [uri]::EscapeDataString($lookup)
-        $right = Invoke-RestMethod -Uri "https://api.datamuse.com/words?lc=$encoded&sp=*&max=6" -TimeoutSec 6
-        $left = Invoke-RestMethod -Uri "https://api.datamuse.com/words?rc=$encoded&sp=*&max=6" -TimeoutSec 6
+        $right = Invoke-RestMethod -Uri "https://api.datamuse.com/words?lc=$encoded&sp=*&max=6" -TimeoutSec 5
+        $left = Invoke-RestMethod -Uri "https://api.datamuse.com/words?rc=$encoded&sp=*&max=6" -TimeoutSec 5
         $collocations += @($right | ForEach-Object { "$lookup $($_.word)" })
         $collocations += @($left | ForEach-Object { "$($_.word) $lookup" })
       } catch {}
@@ -158,7 +187,7 @@ try {
         v.get(key).and_then(|x| x.as_array()).cloned().unwrap_or_default()
             .into_iter().filter_map(|x| x.as_str().map(str::to_string)).collect()
     };
-    Ok(TranslationHit {
+    let hit = TranslationHit {
         translation,
         source_language: v.get("source_language").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
         target_language: v.get("target_language").and_then(|x| x.as_str()).unwrap_or("vi").to_string(),
@@ -168,5 +197,13 @@ try {
         synonyms: strings("synonyms"),
         antonyms: strings("antonyms"),
         entries,
-    })
+    };
+    // Lưu cache (giới hạn 500 mục để không phình RAM)
+    if let Ok(mut c) = translate_cache().lock() {
+        if c.len() >= 500 {
+            c.clear();
+        }
+        c.insert(key, hit.clone());
+    }
+    Ok(hit)
 }
