@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Serialize, Clone)]
 pub struct KnowledgeHit {
@@ -30,45 +32,196 @@ pub struct TranslationHit {
     pub entries: Vec<TranslationEntry>,
 }
 
-/// Tra cứu Wikipedia tiếng Việt và trả phần mở đầu dạng plain text.
+const UA: &str = "HeaSpot/0.1 desktop launcher";
+
+/// GET một URL trả JSON (native, không qua PowerShell -> nhanh hơn nhiều)
+fn http_json(url: &str) -> Option<serde_json::Value> {
+    let body = ureq::get(url)
+        .set("User-Agent", UA)
+        .timeout(Duration::from_secs(8))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Google Translate (endpoint gtx). Trả JSON thô của translate_a/single.
+fn google_translate(text: &str, sl: &str, tl: &str) -> Option<serde_json::Value> {
+    let body = ureq::get("https://translate.googleapis.com/translate_a/single")
+        .query("client", "gtx")
+        .query("sl", sl)
+        .query("tl", tl)
+        .query("dt", "t")
+        .query("q", text)
+        .set("User-Agent", UA)
+        .timeout(Duration::from_secs(8))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Ghép các đoạn dịch trong response Google ([0][*][0]) thành chuỗi.
+fn gt_text(v: &serde_json::Value) -> String {
+    v.get(0)
+        .and_then(|a| a.as_array())
+        .map(|segs| {
+            segs.iter()
+                .filter_map(|s| s.get(0).and_then(|x| x.as_str()))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
+}
+
+fn is_english_word(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty()
+        && s.len() <= 40
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+}
+
+/// Khử trùng lặp giữ thứ tự, bỏ rỗng.
+fn dedup(v: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|s| !s.trim().is_empty() && seen.insert(s.to_lowercase()));
+}
+
+struct DictData {
+    phonetic: String,
+    audio: String,
+    defs: Vec<(String, String, String)>, // (part_of_speech, definition_en, example)
+    synonyms: Vec<String>,
+    antonyms: Vec<String>,
+}
+
+/// Gọi dictionaryapi.dev, parse phonetic/audio/definitions/synonyms.
+fn fetch_dict(word: &str) -> DictData {
+    let mut out = DictData {
+        phonetic: String::new(),
+        audio: String::new(),
+        defs: Vec::new(),
+        synonyms: Vec::new(),
+        antonyms: Vec::new(),
+    };
+    let url = format!("https://api.dictionaryapi.dev/api/v2/entries/en/{word}");
+    let Some(v) = http_json(&url) else { return out };
+    let Some(entry) = v.get(0) else { return out };
+
+    out.phonetic = entry.get("phonetic").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if let Some(phs) = entry.get("phonetics").and_then(|x| x.as_array()) {
+        for p in phs {
+            if let Some(a) = p.get("audio").and_then(|x| x.as_str()) {
+                if !a.is_empty() {
+                    out.audio = a.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    let push_strs = |dst: &mut Vec<String>, v: Option<&serde_json::Value>| {
+        if let Some(arr) = v.and_then(|x| x.as_array()) {
+            for s in arr {
+                if let Some(s) = s.as_str() {
+                    dst.push(s.to_string());
+                }
+            }
+        }
+    };
+    if let Some(meanings) = entry.get("meanings").and_then(|x| x.as_array()) {
+        for m in meanings {
+            push_strs(&mut out.synonyms, m.get("synonyms"));
+            push_strs(&mut out.antonyms, m.get("antonyms"));
+            let pos = m.get("partOfSpeech").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            if let Some(defs) = m.get("definitions").and_then(|x| x.as_array()) {
+                for d in defs.iter().take(2) {
+                    if out.defs.len() >= 6 {
+                        break;
+                    }
+                    let en = d.get("definition").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let ex = d.get("example").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    out.defs.push((pos.clone(), en, ex));
+                    push_strs(&mut out.synonyms, d.get("synonyms"));
+                    push_strs(&mut out.antonyms, d.get("antonyms"));
+                }
+            }
+            if out.defs.len() >= 6 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Collocations qua datamuse (từ đứng trước & sau) — 2 call chạy song song.
+fn fetch_collocations(word: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let w1 = word.to_string();
+    let h_right = thread::spawn(move || http_json(&format!("https://api.datamuse.com/words?lc={w1}&sp=*&max=6")));
+    let left = http_json(&format!("https://api.datamuse.com/words?rc={word}&sp=*&max=6"));
+    let right = h_right.join().ok().flatten();
+    if let Some(arr) = right.as_ref().and_then(|v| v.as_array()) {
+        for w in arr {
+            if let Some(x) = w.get("word").and_then(|x| x.as_str()) {
+                out.push(format!("{word} {x}"));
+            }
+        }
+    }
+    if let Some(arr) = left.as_ref().and_then(|v| v.as_array()) {
+        for w in arr {
+            if let Some(x) = w.get("word").and_then(|x| x.as_str()) {
+                out.push(format!("{x} {word}"));
+            }
+        }
+    }
+    out
+}
+
+/// Tra Wikipedia tiếng Việt (native ureq).
 #[tauri::command]
 pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String> {
     let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    let script = r#"
-try {
-  $q = [uri]::EscapeDataString($env:WINSPOT_WIKI_QUERY)
-  $uri = "https://vi.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$q&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url&format=json&utf8=1"
-  $h = @{ 'User-Agent' = 'WinSpot/0.1 desktop launcher' }
-  $r = Invoke-RestMethod -Uri $uri -Headers $h -Method GET -TimeoutSec 10
-  $out = @($r.query.pages.PSObject.Properties.Value | Sort-Object index | ForEach-Object {
-    [pscustomobject]@{ title = [string]$_.title; extract = [string]$_.extract; url = [string]$_.fullurl }
-  })
-  ConvertTo-Json -InputObject $out -Compress -Depth 4
-} catch { '[]' }
-"#;
-    let stdout = tauri::async_runtime::spawn_blocking(move || {
-        crate::commands::run_hidden_ps(script, &[("WINSPOT_WIKI_QUERY", &q)])
+    let hits = tauri::async_runtime::spawn_blocking(move || {
+        let url = format!(
+            "https://vi.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url&format=json&utf8=1",
+            urlencoding(&q)
+        );
+        let Some(v) = http_json(&url) else { return Vec::new() };
+        let mut pages: Vec<(i64, KnowledgeHit)> = Vec::new();
+        if let Some(obj) = v.get("query").and_then(|x| x.get("pages")).and_then(|x| x.as_object()) {
+            for page in obj.values() {
+                let title = page.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let extract = page.get("extract").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+                let url = page.get("fullurl").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let index = page.get("index").and_then(|x| x.as_i64()).unwrap_or(999);
+                if !extract.is_empty() {
+                    pages.push((index, KnowledgeHit { title, extract, url }));
+                }
+            }
+        }
+        pages.sort_by_key(|(i, _)| *i);
+        pages.into_iter().map(|(_, h)| h).collect()
     })
     .await
-    .map_err(|e| e.to_string())??;
-    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_default();
-    let items = match value {
-        serde_json::Value::Array(a) => a,
-        obj @ serde_json::Value::Object(_) => vec![obj],
-        _ => vec![],
-    };
-    Ok(items
-        .into_iter()
-        .filter_map(|v| {
-            let title = v.get("title")?.as_str()?.to_string();
-            let extract = v.get("extract").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-            let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            (!extract.is_empty()).then_some(KnowledgeHit { title, extract, url })
-        })
-        .collect())
+    .map_err(|e| e.to_string())?;
+    Ok(hits)
+}
+
+/// Encode tối thiểu cho query string (đủ dùng cho từ khoá tìm kiếm).
+fn urlencoding(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Cache dịch trong RAM (theo phiên) — tra lại từ cũ là tức thì, không gọi mạng.
@@ -77,128 +230,22 @@ fn translate_cache() -> &'static Mutex<HashMap<String, TranslationHit>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Smart Translate: dịch tự động; với một từ tiếng Anh còn lấy phonetic, loại từ và định nghĩa.
+/// Smart Translate — native ureq + chạy song song translate/dictionary/datamuse.
 #[tauri::command]
 pub async fn translate_lookup(query: String) -> Result<TranslationHit, String> {
     let q = query.trim().to_string();
-    if q.is_empty() { return Err("nội dung dịch trống".into()); }
-
-    // 1) Cache hit -> trả ngay
+    if q.is_empty() {
+        return Err("nội dung dịch trống".into());
+    }
     let key = q.to_lowercase();
     if let Some(hit) = translate_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
         return Ok(hit);
     }
 
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-function GT([string]$text, [string]$sl, [string]$tl) {
-  $e = [uri]::EscapeDataString($text)
-  $u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&dt=t&q=$e"
-  Invoke-RestMethod -Uri $u -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 10
-}
-try {
-  $first = GT $env:WINSPOT_TRANSLATE_QUERY 'auto' 'vi'
-  $detected = [string]$first[2]
-  $target = if ($detected -eq 'vi') { 'en' } else { 'vi' }
-  if ($target -eq 'vi') { $tr = $first } else { $tr = GT $env:WINSPOT_TRANSLATE_QUERY 'auto' $target }
-  $translated = [string](($tr[0] | ForEach-Object { $_[0] }) -join '')
-  $lookup = if ($detected -eq 'en') { $env:WINSPOT_TRANSLATE_QUERY.Trim() } elseif ($target -eq 'en') { $translated.Trim() } else { '' }
-  $phonetic = ''
-  $audio = ''
-  $collocations = @()
-  $synonyms = @()
-  $antonyms = @()
-  $entries = @()
-  if ($lookup -match '^[A-Za-z][A-Za-z''-]*$') {
-    try {
-      $du = 'https://api.dictionaryapi.dev/api/v2/entries/en/' + [uri]::EscapeDataString($lookup)
-      $dict = Invoke-RestMethod -Uri $du -Headers @{ 'User-Agent'='WinSpot/0.1 desktop launcher' } -TimeoutSec 8
-      $phonetic = [string]$dict[0].phonetic
-      $audio = [string](@($dict[0].phonetics | Where-Object { $_.audio } | Select-Object -First 1).audio)
-      # Gom định nghĩa trước (chưa dịch)
-      $defList = @()
-      foreach ($meaning in @($dict[0].meanings)) {
-        $synonyms += @($meaning.synonyms)
-        $antonyms += @($meaning.antonyms)
-        foreach ($def in @($meaning.definitions | Select-Object -First 2)) {
-          if ($defList.Count -ge 6) { break }
-          $defList += [pscustomobject]@{
-            part_of_speech = [string]$meaning.partOfSpeech
-            definition_en = [string]$def.definition
-            example = [string]$def.example
-          }
-          $synonyms += @($def.synonyms)
-          $antonyms += @($def.antonyms)
-        }
-        if ($defList.Count -ge 6) { break }
-      }
-      # Dịch TẤT CẢ định nghĩa trong 1 request (nối bằng xuống dòng) thay vì 6 request
-      if ($defList.Count -gt 0) {
-        $joined = ($defList | ForEach-Object { $_.definition_en }) -join "`n"
-        $viResp = GT $joined 'en' 'vi'
-        $viFull = [string](($viResp[0] | ForEach-Object { $_[0] }) -join '')
-        $viLines = @($viFull -split "`n")
-        for ($i = 0; $i -lt $defList.Count; $i++) {
-          $vi = if ($i -lt $viLines.Count) { [string]$viLines[$i].Trim() } else { '' }
-          $entries += [pscustomobject]@{
-            part_of_speech = $defList[$i].part_of_speech
-            definition_en = $defList[$i].definition_en
-            definition_vi = $vi
-            example = $defList[$i].example
-          }
-        }
-      }
-      try {
-        $encoded = [uri]::EscapeDataString($lookup)
-        $right = Invoke-RestMethod -Uri "https://api.datamuse.com/words?lc=$encoded&sp=*&max=6" -TimeoutSec 5
-        $left = Invoke-RestMethod -Uri "https://api.datamuse.com/words?rc=$encoded&sp=*&max=6" -TimeoutSec 5
-        $collocations += @($right | ForEach-Object { "$lookup $($_.word)" })
-        $collocations += @($left | ForEach-Object { "$($_.word) $lookup" })
-      } catch {}
-    } catch {}
-  }
-  [pscustomobject]@{
-    translation = $translated
-    source_language = $detected
-    target_language = $target
-    phonetic = $phonetic
-    audio_url = $audio
-    collocations = @($collocations | Where-Object { $_ } | Select-Object -Unique -First 10)
-    synonyms = @($synonyms | Where-Object { $_ } | Select-Object -Unique -First 12)
-    antonyms = @($antonyms | Where-Object { $_ } | Select-Object -Unique -First 12)
-    entries = @($entries)
-  } | ConvertTo-Json -Compress -Depth 6
-} catch { '{}' }
-"#;
-    let stdout = tauri::async_runtime::spawn_blocking(move || {
-        crate::commands::run_hidden_ps(script, &[("WINSPOT_TRANSLATE_QUERY", &q)])
-    }).await.map_err(|e| e.to_string())??;
-    let v: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| e.to_string())?;
-    let translation = v.get("translation").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    if translation.is_empty() { return Err("dịch vụ dịch không trả về kết quả".into()); }
-    let entries = v.get("entries").and_then(|x| x.as_array()).cloned().unwrap_or_default()
-        .into_iter().map(|e| TranslationEntry {
-            part_of_speech: e.get("part_of_speech").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            definition_en: e.get("definition_en").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            definition_vi: e.get("definition_vi").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            example: e.get("example").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        }).collect();
-    let strings = |key: &str| -> Vec<String> {
-        v.get(key).and_then(|x| x.as_array()).cloned().unwrap_or_default()
-            .into_iter().filter_map(|x| x.as_str().map(str::to_string)).collect()
-    };
-    let hit = TranslationHit {
-        translation,
-        source_language: v.get("source_language").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
-        target_language: v.get("target_language").and_then(|x| x.as_str()).unwrap_or("vi").to_string(),
-        phonetic: v.get("phonetic").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        audio_url: v.get("audio_url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        collocations: strings("collocations"),
-        synonyms: strings("synonyms"),
-        antonyms: strings("antonyms"),
-        entries,
-    };
-    // Lưu cache (giới hạn 500 mục để không phình RAM)
+    let hit = tauri::async_runtime::spawn_blocking(move || do_translate(&q))
+        .await
+        .map_err(|e| e.to_string())??;
+
     if let Ok(mut c) = translate_cache().lock() {
         if c.len() >= 500 {
             c.clear();
@@ -206,4 +253,109 @@ try {
         c.insert(key, hit.clone());
     }
     Ok(hit)
+}
+
+fn do_translate(q: &str) -> Result<TranslationHit, String> {
+    let en_input = is_english_word(q);
+
+    // Fire song song: translate (luôn) + dict + datamuse (nếu input là 1 từ tiếng Anh)
+    let q1 = q.to_string();
+    let h_trans = thread::spawn(move || google_translate(&q1, "auto", "vi"));
+    let (h_dict, h_dm) = if en_input {
+        let w = q.to_string();
+        let hd = thread::spawn(move || fetch_dict(&w));
+        let w2 = q.to_string();
+        let hm = thread::spawn(move || fetch_collocations(&w2));
+        (Some(hd), Some(hm))
+    } else {
+        (None, None)
+    };
+
+    let first = h_trans.join().ok().flatten().ok_or("dịch vụ dịch không phản hồi")?;
+    let detected = first.get(2).and_then(|x| x.as_str()).unwrap_or("auto").to_string();
+    let target = if detected == "vi" { "en".to_string() } else { "vi".to_string() };
+    let translation = if target == "vi" {
+        gt_text(&first)
+    } else {
+        google_translate(q, "auto", &target).map(|v| gt_text(&v)).unwrap_or_default()
+    };
+    if translation.trim().is_empty() {
+        return Err("dịch vụ dịch không trả về kết quả".into());
+    }
+
+    // Lấy dữ liệu từ điển: input tiếng Anh -> đã fire; input tiếng Việt -> tra từ tiếng Anh vừa dịch
+    let lookup = if detected == "en" {
+        q.to_string()
+    } else if target == "en" {
+        translation.trim().to_string()
+    } else {
+        String::new()
+    };
+
+    let (dict, mut collocations): (Option<DictData>, Vec<String>) = if en_input {
+        (
+            h_dict.and_then(|h| h.join().ok()),
+            h_dm.and_then(|h| h.join().ok()).unwrap_or_default(),
+        )
+    } else if !lookup.is_empty() && is_english_word(&lookup) {
+        let w = lookup.clone();
+        let hd = thread::spawn(move || fetch_dict(&w));
+        let w2 = lookup.clone();
+        let hm = thread::spawn(move || fetch_collocations(&w2));
+        (hd.join().ok(), hm.join().ok().unwrap_or_default())
+    } else {
+        (None, Vec::new())
+    };
+
+    let mut entries = Vec::new();
+    let mut synonyms = Vec::new();
+    let mut antonyms = Vec::new();
+    let mut phonetic = String::new();
+    let mut audio = String::new();
+
+    if let Some(d) = dict {
+        phonetic = d.phonetic;
+        audio = d.audio;
+        synonyms = d.synonyms;
+        antonyms = d.antonyms;
+        // Dịch tất cả định nghĩa trong 1 request (nối bằng xuống dòng)
+        if !d.defs.is_empty() {
+            let joined = d
+                .defs
+                .iter()
+                .map(|(_, en, _)| en.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let vi_full = google_translate(&joined, "en", "vi").map(|v| gt_text(&v)).unwrap_or_default();
+            let vi_lines: Vec<&str> = vi_full.split('\n').collect();
+            for (i, (pos, en, ex)) in d.defs.iter().enumerate() {
+                let vi = vi_lines.get(i).map(|s| s.trim().to_string()).unwrap_or_default();
+                entries.push(TranslationEntry {
+                    part_of_speech: pos.clone(),
+                    definition_en: en.clone(),
+                    definition_vi: vi,
+                    example: ex.clone(),
+                });
+            }
+        }
+    }
+
+    dedup(&mut collocations);
+    collocations.truncate(10);
+    dedup(&mut synonyms);
+    synonyms.truncate(12);
+    dedup(&mut antonyms);
+    antonyms.truncate(12);
+
+    Ok(TranslationHit {
+        translation,
+        source_language: detected,
+        target_language: target,
+        phonetic,
+        audio_url: audio,
+        collocations,
+        synonyms,
+        antonyms,
+        entries,
+    })
 }
