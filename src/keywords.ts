@@ -24,6 +24,7 @@ export const KW_FEATURES: KwFeature[] = [
   { id: "review", label: "Danh sách từ ôn tập", def: "review", kind: "word", example: "review", group: "Tìm kiếm & tri thức" },
   { id: "formula", label: "Công thức Toán/Lý/Hóa", def: "formula", kind: "word", example: "formula động năng", group: "Tìm kiếm & tri thức" },
   { id: "chemistry", label: "Từ điển hóa học (nguyên tố, phân tử khối)", def: "chem", kind: "word", example: "chem Fe · chem H2O", group: "Tìm kiếm & tri thức" },
+  { id: "latex", label: "Công thức LaTeX (căn, phân số, ma trận…)", def: "latex", kind: "word", example: "latex hệ phương trình", group: "Tìm kiếm & tri thức" },
   { id: "google", label: "Tìm Google", def: "g", kind: "word", example: "g cách làm bánh", group: "Tìm kiếm & tri thức" },
   { id: "youtube", label: "Tìm YouTube", def: "yt", kind: "word", example: "yt lofi", group: "Tìm kiếm & tri thức" },
   // Tiện ích

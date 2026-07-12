@@ -127,7 +127,7 @@ fn default_feature_keyword(id: &str) -> &'static str {
         "password" => "pw", "generator" => "#", "snippet" => ";", "process" => "ps",
         "system" => "sys", "window" => "<", "vscode" => "{", "service" => "!",
         "registry" => ":", "terminal" => ">",
-        "port" => "port", "json" => "json", "jwt" => "jwt", _ => "",
+        "port" => "port", "json" => "json", "jwt" => "jwt", "latex" => "latex", _ => "",
     }
 }
 

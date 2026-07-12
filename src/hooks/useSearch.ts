@@ -10,6 +10,7 @@ import { matchSystemCommands } from "../plugins/systemCommands";
 import { findFormulas } from "../plugins/formulas";
 import { findChemistry } from "../plugins/chemistry";
 import { buildJsonResults, buildJwtResults } from "../plugins/devtools";
+import { findLatex } from "../plugins/latex";
 import { matchWord, type KwMap, DEFAULT_KEYWORDS } from "../keywords";
 import type {
   BackendSearchResponse,
@@ -298,7 +299,46 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
 
     const formulaArg = matchWord(q, kw.formula);
     if (formulaArg !== null) {
-      setResults(findFormulas(formulaArg));
+      const local = findFormulas(formulaArg);
+      // Có sẵn offline (hoặc đang duyệt danh sách) -> hiện tức thì
+      if (!formulaArg.trim() || local.length > 0) {
+        setResults(local);
+        return;
+      }
+      // Không khớp offline -> fallback Wikipedia để "cân mọi công thức"
+      setResults([{
+        id: "formula:loading", title: `Đang tra công thức "${formulaArg}"…`,
+        kind: "knowledge", text: "", action: "formula",
+        preview: `Không có sẵn offline — đang tra Wikipedia cho "${formulaArg}"…`,
+      }]);
+      const mapWiki = (hits: KnowledgeHit[]) => hits.map((h, i) => ({
+        id: `formula-wiki:${i}:${h.title}`, title: h.title,
+        subtitle: h.extract.length > 120 ? `${h.extract.slice(0, 120)}…` : h.extract,
+        kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url, action: "formula",
+      }));
+      const t = setTimeout(() => {
+        let done = false;
+        let tc = 0;
+        invoke<KnowledgeHit[]>("wiki_titles", { query: formulaArg })
+          .then((hits) => { if (!done && hits.length) { tc = hits.length; fresh(() => setResults(mapWiki(hits))); } })
+          .catch(() => {});
+        invoke<KnowledgeHit[]>("wikipedia_search", { query: formulaArg })
+          .then((hits) => {
+            done = true;
+            if (hits.length) fresh(() => setResults(mapWiki(hits)));
+            else if (tc === 0) fresh(() => setResults([{
+              id: "formula:none", title: `Không tìm thấy công thức "${formulaArg}"`,
+              subtitle: "Thử tên khác hoặc gõ wiki <khái niệm>", kind: "knowledge", text: "", preview: "", action: "formula",
+            }]));
+          })
+          .catch(() => { done = true; });
+      }, 130);
+      return () => clearTimeout(t);
+    }
+
+    const latexArg = kw.latex ? matchWord(q, kw.latex) : null;
+    if (latexArg !== null) {
+      setResults(findLatex(latexArg));
       return;
     }
 
