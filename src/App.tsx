@@ -302,7 +302,13 @@ export default function App() {
           hide();
           break;
         case "knowledge":
-          if (item.text) await invoke("paste_text", { text: item.text });
+          // OCR: Enter = copy văn bản (đã sửa); còn lại = dán như cũ
+          if (item.action === "ocr") {
+            if (item.text) await invoke("copy_text", { text: item.text });
+            hide();
+          } else if (item.text) {
+            await invoke("paste_text", { text: item.text });
+          }
           break;
         case "url":
           if (!item.url) return;
@@ -680,8 +686,16 @@ export default function App() {
             {showKnowledge && selectedResult && (
               <KnowledgePreview
                 item={selectedResult}
+                editable={selectedResult.action === "ocr"}
+                onEdit={(text) =>
+                  setOcrItem((prev) => (prev ? { ...prev, text, preview: text } : prev))
+                }
+                onExit={() => inputRef.current?.focus()}
                 onPaste={() => void invoke("paste_text", { text: selectedResult.text })}
-                onCopy={() => void invoke("copy_text", { text: selectedResult.text })}
+                onCopy={() => {
+                  void invoke("copy_text", { text: selectedResult.text ?? "" });
+                  hide();
+                }}
                 onOpen={() => {
                   if (selectedResult.url) void invoke("open_url", { url: selectedResult.url });
                 }}
