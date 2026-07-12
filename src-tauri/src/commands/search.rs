@@ -268,11 +268,18 @@ impl Everything {
 // Full-text search qua Windows Search (Search.CollatorDSO OLE DB)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct FullTextHit {
     pub name: String,
     pub path: String,
     pub preview: String,
+}
+
+/// Cache kết quả full-text theo phiên -> tra lại cùng từ khoá là tức thì.
+fn fulltext_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Vec<FullTextHit>>> {
+    use std::sync::{Mutex, OnceLock};
+    static C: OnceLock<Mutex<std::collections::HashMap<String, Vec<FullTextHit>>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Tìm nội dung bên trong file (Word, PDF, Excel...) qua Windows Search Index.
@@ -286,6 +293,10 @@ pub async fn fulltext_search(query: String) -> Result<Vec<FullTextHit>, String> 
     let q = q.trim().to_string();
     if q.is_empty() {
         return Ok(Vec::new());
+    }
+    let key = q.to_lowercase();
+    if let Some(hits) = fulltext_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hits);
     }
 
     let home = dirs::home_dir()
@@ -352,6 +363,12 @@ try {
             })
         })
         .filter(|h| !h.path.is_empty())
-        .collect();
+        .collect::<Vec<_>>();
+    if let Ok(mut c) = fulltext_cache().lock() {
+        if c.len() >= 300 {
+            c.clear();
+        }
+        c.insert(key, hits.clone());
+    }
     Ok(hits)
 }

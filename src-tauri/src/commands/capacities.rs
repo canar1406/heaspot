@@ -3,6 +3,9 @@
 //! lưu trong bảng settings của SQLite.
 
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 #[derive(Serialize)]
 pub struct CapacitiesHit {
@@ -10,6 +13,12 @@ pub struct CapacitiesHit {
     pub space_id: String,
     pub title: String,
     pub preview: String,
+}
+
+/// Cache danh sách spaceIds theo token (ít khi đổi) -> bỏ 1 request GET mỗi lần tìm.
+fn spaces_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static C: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn read_token(conn: &rusqlite::Connection) -> Option<String> {
@@ -33,8 +42,11 @@ pub fn set_capacities_token(
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         rusqlite::params![token.trim()],
     )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if let Ok(mut c) = spaces_cache().lock() {
+        c.clear();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -64,58 +76,83 @@ pub async fn capacities_search(
         return Ok(Vec::new());
     }
 
-    // Gọi API qua PowerShell ẩn (đồng bộ với cách làm của fulltext_search)
-    let script = r#"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-try {
-  $H = @{ Authorization = "Bearer $env:CAP_TOKEN" }
-  $spaces = (Invoke-RestMethod -Uri "https://api.capacities.io/spaces" -Headers $H -Method GET -TimeoutSec 8).spaces
-  $ids = @($spaces | ForEach-Object { $_.id })
-  $body = @{ mode = "fullText"; searchTerm = $env:CAP_QUERY; spaceIds = $ids } | ConvertTo-Json
-  $r = Invoke-RestMethod -Uri "https://api.capacities.io/search" -Headers $H -Method POST -Body $body -ContentType "application/json" -TimeoutSec 10
-  $out = @($r.results | ForEach-Object {
-    $snips = @()
-    foreach ($hl in @($_.highlights)) { $snips += @($hl.snippets) }
-    [pscustomobject]@{
-      id      = [string]$_.id
-      spaceId = [string]$_.spaceId
-      title   = [string]$_.title
-      preview = [string](($snips | Select-Object -First 3) -join " … ")
-    }
-  })
-  ConvertTo-Json -InputObject $out -Compress -Depth 5
-} catch { '[]' }
-"#;
+    // Native ureq: lấy spaceIds (cache) rồi POST search — không spawn PowerShell.
+    let hits = tauri::async_runtime::spawn_blocking(move || capacities_call(&token, &q))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(hits.unwrap_or_default())
+}
 
-    let stdout = tauri::async_runtime::spawn_blocking(move || {
-        crate::commands::run_hidden_ps(script, &[("CAP_TOKEN", &token), ("CAP_QUERY", &q)])
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+fn capacities_call(token: &str, q: &str) -> Option<Vec<CapacitiesHit>> {
+    let bearer = format!("Bearer {token}");
 
-    let json = stdout.trim();
-    if json.is_empty() {
-        return Ok(Vec::new());
-    }
-    let value: serde_json::Value = serde_json::from_str(json).unwrap_or(serde_json::json!([]));
-    let items = match value {
-        serde_json::Value::Array(a) => a,
-        obj @ serde_json::Value::Object(_) => vec![obj],
-        _ => vec![],
+    // spaceIds từ cache, nếu chưa có thì gọi GET /spaces một lần
+    let ids: Vec<String> = if let Some(c) = spaces_cache().lock().ok().and_then(|c| c.get(token).cloned()) {
+        c
+    } else {
+        let v: serde_json::Value = ureq::get("https://api.capacities.io/spaces")
+            .set("Authorization", &bearer)
+            .timeout(Duration::from_secs(8))
+            .call()
+            .ok()?
+            .into_json()
+            .ok()?;
+        let ids: Vec<String> = v
+            .get("spaces")
+            .and_then(|s| s.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !ids.is_empty() {
+            if let Ok(mut c) = spaces_cache().lock() {
+                c.insert(token.to_string(), ids.clone());
+            }
+        }
+        ids
     };
-    let hits = items
+    if ids.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let body = serde_json::json!({ "mode": "fullText", "searchTerm": q, "spaceIds": ids });
+    let r: serde_json::Value = ureq::post("https://api.capacities.io/search")
+        .set("Authorization", &bearer)
+        .timeout(Duration::from_secs(10))
+        .send_json(body)
+        .ok()?
+        .into_json()
+        .ok()?;
+
+    let results = r.get("results").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let hits = results
         .into_iter()
         .filter_map(|v| {
             let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let mut snips: Vec<String> = Vec::new();
+            if let Some(hls) = v.get("highlights").and_then(|x| x.as_array()) {
+                for hl in hls {
+                    if let Some(arr) = hl.get("snippets").and_then(|x| x.as_array()) {
+                        for s in arr {
+                            if let Some(s) = s.as_str() {
+                                snips.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            let preview = snips.into_iter().take(3).collect::<Vec<_>>().join(" … ");
             let hit = CapacitiesHit {
                 id: get("id"),
                 space_id: get("spaceId"),
                 title: get("title"),
-                preview: get("preview"),
+                preview,
             };
             (!hit.id.is_empty() && !hit.space_id.is_empty()).then_some(hit)
         })
         .take(10)
         .collect();
-    Ok(hits)
+    Some(hits)
 }
