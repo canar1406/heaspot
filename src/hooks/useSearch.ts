@@ -197,14 +197,21 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
       }));
       const t = setTimeout(() => {
         let fullDone = false;
+        const showErr = (where: string, err: unknown) => fresh(() => setResults([{
+          id: "knowledge:err", title: `Wikipedia lỗi (${where})`, subtitle: String(err),
+          kind: "knowledge", text: "", preview: `Lỗi khi tra “${wikiArg}” (${where}):\n${String(err)}`, action: "translate",
+        }]));
         // PHA 1: tiêu đề + snippet nhanh -> hiện tức thì
         invoke<KnowledgeHit[]>("wiki_titles", { query: wikiArg })
           .then((hits) => { if (!fullDone && hits.length) fresh(() => setResults(mapHits(hits))); })
-          .catch(() => {});
+          .catch((e) => showErr("titles", e));
         // PHA 2: extract intro đầy đủ -> thay khi xong (giữ nguyên chi tiết)
         invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg })
-          .then((hits) => { fullDone = true; fresh(() => setResults(mapHits(hits))); })
-          .catch(() => {});
+          .then((hits) => { fullDone = true; fresh(() => setResults(hits.length ? mapHits(hits) : [{
+            id: "knowledge:empty", title: `Không có kết quả Wikipedia cho “${wikiArg}”`,
+            subtitle: "Thử từ khoá khác", kind: "knowledge", text: "", preview: "", action: "translate",
+          }])); })
+          .catch((e) => { fullDone = true; showErr("extract", e); });
       }, 130);
       return () => clearTimeout(t);
     }
