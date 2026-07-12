@@ -13,6 +13,7 @@ const DEFAULTS: AppSettings = {
   clipboard_retention_days: 0,
   privacy_apps: "keepass,bitwarden,1password,lastpass,dashlane,protonpass",
   auto_paste: true,
+  brave_api_key: "",
   enable_browser_passwords: false,
   password_to_history: false,
   theme: "system",
@@ -155,6 +156,20 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                     <option value="light">Sáng</option>
                     <option value="dark">Tối</option>
                   </select>
+                </label>
+              </Section>
+
+              <Section title="Kết quả nhanh Google (g)">
+                <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-[11.5px] text-sky-700 dark:text-sky-300">
+                  Để <b>g &lt;từ khoá&gt;</b> phủ MỌI truy vấn (kể cả sản phẩm/tin niche), dán
+                  Brave Search API key (miễn phí 2000 lượt/tháng). Lấy tại{" "}
+                  <b>brave.com/search/api</b> → đăng ký → copy key. Bỏ trống thì dùng
+                  DuckDuckGo + Wikipedia (chỉ phủ khái niệm phổ biến).
+                </div>
+                <label className="block">
+                  <span className="block text-[12px] font-medium mb-1.5">Brave Search API key</span>
+                  <input className={field} type="password" placeholder="BSA…" value={value.brave_api_key}
+                    onChange={(e) => setValue({ ...value, brave_api_key: e.target.value })} />
                 </label>
               </Section>
 

@@ -302,8 +302,8 @@ export default function App() {
           hide();
           break;
         case "knowledge":
-          // OCR: Enter = copy văn bản (đã sửa); còn lại = dán như cũ
-          if (item.action === "ocr") {
+          // OCR / Google quick answer: Enter = copy; còn lại = dán như cũ
+          if (item.action === "ocr" || item.action === "google") {
             if (item.text) await invoke("copy_text", { text: item.text });
             hide();
           } else if (item.text) {

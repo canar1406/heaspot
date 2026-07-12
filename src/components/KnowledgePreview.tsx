@@ -38,7 +38,8 @@ export function KnowledgePreview({ item, onPaste, onCopy, onOpen, onSave, onTran
             : item.action === "formula" ? "Formula · biến số & đơn vị"
               : item.action === "review" ? "Danh sách ôn tập"
                 : item.action === "ocr" ? "Windows OCR · sửa trực tiếp · Enter để copy"
-                  : "Wikipedia · xem nhanh"}
+                  : item.action === "google" ? "Kết quả nhanh · Google / DuckDuckGo"
+                    : "Wikipedia · xem nhanh"}
         </div>
       </div>
       {editable ? (

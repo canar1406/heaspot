@@ -61,6 +61,7 @@ pub fn run() {
             commands::knowledge::wiki_titles,
             commands::knowledge::translate_lookup,
             commands::knowledge::quick_translate,
+            commands::knowledge::quick_answer,
             commands::ocr::capture_ocr,
             commands::settings::get_settings,
             commands::settings::save_settings,

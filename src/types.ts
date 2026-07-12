@@ -148,6 +148,13 @@ export interface QuickTranslation {
   target_language: string;
 }
 
+export interface QuickAnswer {
+  answer: string;
+  source: string;
+  url: string;
+  related: string[];
+}
+
 export interface TranslationHit {
   translation: string;
   source_language: string;
@@ -205,6 +212,7 @@ export interface AppSettings {
   clipboard_retention_days: number;
   privacy_apps: string;
   auto_paste: boolean;
+  brave_api_key: string;
   enable_browser_passwords: boolean;
   password_to_history: boolean;
   theme: string; // "system" | "light" | "dark"

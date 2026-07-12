@@ -34,6 +34,8 @@ pub struct TranslationHit {
 
 const UA: &str = "HeaSpot/0.1 desktop launcher";
 
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 /// GET một URL trả JSON (native, không qua PowerShell -> nhanh hơn nhiều)
 fn http_json(url: &str) -> Option<serde_json::Value> {
     let body = ureq::get(url)
@@ -44,6 +46,68 @@ fn http_json(url: &str) -> Option<serde_json::Value> {
         .into_string()
         .ok()?;
     serde_json::from_str(&body).ok()
+}
+
+/// Bỏ thẻ HTML + giải một số entity phổ biến.
+fn html_to_text(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&#x27;", "'").replace("&#39;", "'").replace("&quot;", "\"")
+        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+        .split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Brave Search API (miễn phí 2000 lần/tháng, cần 1 API key) — phủ MỌI truy vấn
+/// vì trả kết quả web thật kèm mô tả. Key lưu ở settings (brave_api_key).
+fn brave_search(query: &str, key: &str) -> QuickAnswer {
+    let url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&country=vn&search_lang=vi&count=5",
+        urlencoding(query)
+    );
+    let body = match ureq::get(&url)
+        .set("Accept", "application/json")
+        .set("Accept-Encoding", "gzip")
+        .set("X-Subscription-Token", key)
+        .set("User-Agent", BROWSER_UA)
+        .timeout(Duration::from_secs(8))
+        .call()
+    {
+        Ok(r) => r.into_string().unwrap_or_default(),
+        Err(_) => return QuickAnswer::default(),
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return QuickAnswer::default();
+    };
+    let mut lines = Vec::new();
+    let mut first_url = String::new();
+    if let Some(results) = v.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+        for r in results.iter().take(4) {
+            let title = html_to_text(r.get("title").and_then(|x| x.as_str()).unwrap_or(""));
+            let desc = html_to_text(r.get("description").and_then(|x| x.as_str()).unwrap_or(""));
+            if first_url.is_empty() {
+                if let Some(u) = r.get("url").and_then(|x| x.as_str()) {
+                    first_url = u.to_string();
+                }
+            }
+            if !desc.is_empty() {
+                lines.push(if title.is_empty() { format!("• {desc}") } else { format!("• {title}: {desc}") });
+            }
+        }
+    }
+    QuickAnswer {
+        answer: lines.join("\n\n"),
+        source: "Brave Search".to_string(),
+        url: first_url,
+        related: Vec::new(),
+    }
 }
 
 /// Google Translate (endpoint gtx). Trả JSON thô của translate_a/single.
@@ -290,6 +354,78 @@ fn urlencoding(s: &str) -> String {
         }
     }
     out
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct QuickAnswer {
+    pub answer: String,
+    pub source: String,
+    pub url: String,
+    pub related: Vec<String>,
+}
+
+/// Kết quả nhanh cho `g`. Có Brave key -> phủ MỌI truy vấn (kết quả web thật);
+/// không có key -> DuckDuckGo Instant Answer (facts phổ biến) + frontend bù Wikipedia.
+#[tauri::command]
+pub async fn quick_answer(
+    query: String,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<QuickAnswer, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(QuickAnswer::default());
+    }
+    let brave_key = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT value FROM settings WHERE key='brave_api_key'", [], |r| r.get::<_, String>(0))
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+    };
+    let ans = tauri::async_runtime::spawn_blocking(move || {
+        // Ưu tiên Brave (phủ hết) nếu có key
+        if let Some(key) = brave_key {
+            let b = brave_search(&q, &key);
+            if !b.answer.trim().is_empty() {
+                return b;
+            }
+        }
+        let url = format!(
+            "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+            urlencoding(&q)
+        );
+        let Some(v) = http_json(&url) else { return QuickAnswer::default() };
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        // Ưu tiên: Answer > AbstractText > Definition
+        let answer = {
+            let a = s("Answer");
+            if !a.is_empty() { a }
+            else {
+                let ab = s("AbstractText");
+                if !ab.is_empty() { ab } else { s("Definition") }
+            }
+        };
+        let (source, url) = if !s("AbstractSource").is_empty() {
+            (s("AbstractSource"), s("AbstractURL"))
+        } else {
+            (s("DefinitionSource"), s("DefinitionURL"))
+        };
+        // Vài chủ đề liên quan
+        let mut related = Vec::new();
+        if let Some(arr) = v.get("RelatedTopics").and_then(|x| x.as_array()) {
+            for t in arr.iter().take(5) {
+                if let Some(txt) = t.get("Text").and_then(|x| x.as_str()) {
+                    if !txt.is_empty() {
+                        related.push(txt.to_string());
+                    }
+                }
+            }
+        }
+
+        QuickAnswer { answer, source, url, related }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(ans)
 }
 
 /// Cache dịch trong RAM (theo phiên) — tra lại từ cũ là tức thì, không gọi mạng.

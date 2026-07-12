@@ -18,6 +18,7 @@ import type {
   CapacitiesHit,
   FullTextHit,
   KnowledgeHit,
+  QuickAnswer,
   TranslationHit,
   QuickTranslation,
   OpenWindowInfo,
@@ -483,6 +484,54 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
       const url = tryUrl(urlArg);
       setResults(url ? [url] : []);
       return;
+    }
+
+    // Google: kết quả nhanh (preview) + dòng "Tìm chi tiết trên Google"
+    const gArg = kw.google ? matchWord(q, kw.google) : null;
+    if (gArg) {
+      const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(gArg)}`;
+      const detailItem: ResultItemData = {
+        id: "g:detail", title: `Tìm chi tiết "${gArg}" trên Google`,
+        subtitle: "Mở trang kết quả Google đầy đủ", kind: "web", url: googleUrl,
+      };
+      setResults([
+        { id: "g:loading", title: `Đang lấy kết quả nhanh cho "${gArg}"…`, kind: "knowledge", action: "google", text: "", preview: `Đang tra nhanh “${gArg}”…` },
+        detailItem,
+      ]);
+      const t = setTimeout(async () => {
+        const [qa, wiki] = await Promise.allSettled([
+          invoke<QuickAnswer>("quick_answer", { query: gArg }),
+          invoke<KnowledgeHit[]>("wikipedia_search", { query: gArg }),
+        ]);
+        if (seq.current !== mySeq) return;
+        let answer = "";
+        let source = "";
+        let url = "";
+        if (qa.status === "fulfilled" && qa.value.answer.trim()) {
+          answer = qa.value.answer;
+          source = qa.value.source || "DuckDuckGo";
+          url = qa.value.url || "";
+          if (qa.value.related.length) answer += `\n\nLiên quan:\n• ${qa.value.related.join("\n• ")}`;
+        } else if (wiki.status === "fulfilled" && wiki.value.length) {
+          answer = wiki.value[0].extract;
+          source = "Wikipedia";
+          url = wiki.value[0].url;
+        }
+        const answerItem: ResultItemData = answer
+          ? {
+              id: "g:answer", title: `Kết quả nhanh: ${gArg}`,
+              subtitle: `Nguồn: ${source} · Enter để copy`,
+              kind: "knowledge", action: "google", text: answer, preview: answer, url,
+            }
+          : {
+              id: "g:answer", title: `Không có kết quả nhanh cho "${gArg}"`,
+              subtitle: "Thêm Brave API key trong Settings để phủ hết · hoặc mở Google",
+              kind: "knowledge", action: "google", text: "",
+              preview: `Không tìm được tóm tắt nhanh cho “${gArg}”.\n\nĐể phủ MỌI truy vấn (kể cả sản phẩm/tin niche): mở Settings → dán Brave Search API key (miễn phí, brave.com/search/api).\n\nHoặc chọn “Tìm chi tiết trên Google” để xem đầy đủ.`,
+            };
+        setResults([answerItem, detailItem]);
+      }, 130);
+      return () => clearTimeout(t);
     }
 
     const web = tryWebSearch(q, { google: kw.google, youtube: kw.youtube });
