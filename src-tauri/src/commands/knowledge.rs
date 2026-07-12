@@ -65,46 +65,65 @@ fn html_to_text(s: &str) -> String {
         .split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Brave Search API (miễn phí 2000 lần/tháng, cần 1 API key) — phủ MỌI truy vấn
-/// vì trả kết quả web thật kèm mô tả. Key lưu ở settings (brave_api_key).
-fn brave_search(query: &str, key: &str) -> QuickAnswer {
-    let url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&country=vn&search_lang=vi&count=5",
-        urlencoding(query)
-    );
-    let body = match ureq::get(&url)
-        .set("Accept", "application/json")
-        .set("Accept-Encoding", "gzip")
-        .set("X-Subscription-Token", key)
+/// Serper.dev — Google SERP API (đăng ký free 2500 lượt, KHÔNG cần thẻ).
+/// Trả kết quả Google thật: answerBox + knowledgeGraph + organic snippets -> phủ MỌI truy vấn.
+fn serper_search(query: &str, key: &str) -> QuickAnswer {
+    let body_json = serde_json::json!({ "q": query, "gl": "vn", "hl": "vi", "num": 5 });
+    let resp = match ureq::post("https://google.serper.dev/search")
+        .set("X-API-KEY", key)
+        .set("Content-Type", "application/json")
         .set("User-Agent", BROWSER_UA)
         .timeout(Duration::from_secs(8))
-        .call()
+        .send_json(body_json)
     {
         Ok(r) => r.into_string().unwrap_or_default(),
         Err(_) => return QuickAnswer::default(),
     };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) else {
         return QuickAnswer::default();
     };
-    let mut lines = Vec::new();
+
+    let mut parts: Vec<String> = Vec::new();
     let mut first_url = String::new();
-    if let Some(results) = v.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
-        for r in results.iter().take(4) {
-            let title = html_to_text(r.get("title").and_then(|x| x.as_str()).unwrap_or(""));
-            let desc = html_to_text(r.get("description").and_then(|x| x.as_str()).unwrap_or(""));
+    let s = |val: &serde_json::Value, k: &str| val.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+    // 1. Answer box (giống ô trả lời nhanh của Google)
+    if let Some(ab) = v.get("answerBox") {
+        let a = s(ab, "answer");
+        let sn = s(ab, "snippet");
+        let best = if !a.is_empty() { a } else { sn };
+        if !best.is_empty() {
+            parts.push(html_to_text(&best));
+        }
+    }
+    // 2. Knowledge graph (thực thể: sản phẩm, người, nơi chốn…)
+    if let Some(kg) = v.get("knowledgeGraph") {
+        let desc = s(kg, "description");
+        let title = s(kg, "title");
+        if !desc.is_empty() {
+            parts.push(html_to_text(&format!("{title}: {desc}")));
+        }
+    }
+    // 3. Vài kết quả organic đầu (snippet trang web thật)
+    if let Some(org) = v.get("organic").and_then(|x| x.as_array()) {
+        for r in org.iter().take(4) {
             if first_url.is_empty() {
-                if let Some(u) = r.get("url").and_then(|x| x.as_str()) {
-                    first_url = u.to_string();
-                }
+                first_url = s(r, "link");
             }
-            if !desc.is_empty() {
-                lines.push(if title.is_empty() { format!("• {desc}") } else { format!("• {title}: {desc}") });
+            let title = s(r, "title");
+            let sn = s(r, "snippet");
+            if !sn.is_empty() {
+                parts.push(html_to_text(&format!("• {title}: {sn}")));
+            }
+            if parts.len() >= 5 {
+                break;
             }
         }
     }
+
     QuickAnswer {
-        answer: lines.join("\n\n"),
-        source: "Brave Search".to_string(),
+        answer: parts.join("\n\n"),
+        source: "Google (Serper)".to_string(),
         url: first_url,
         related: Vec::new(),
     }
@@ -364,7 +383,7 @@ pub struct QuickAnswer {
     pub related: Vec<String>,
 }
 
-/// Kết quả nhanh cho `g`. Có Brave key -> phủ MỌI truy vấn (kết quả web thật);
+/// Kết quả nhanh cho `g`. Có Serper key -> phủ MỌI truy vấn (kết quả Google thật);
 /// không có key -> DuckDuckGo Instant Answer (facts phổ biến) + frontend bù Wikipedia.
 #[tauri::command]
 pub async fn quick_answer(
@@ -375,16 +394,16 @@ pub async fn quick_answer(
     if q.is_empty() {
         return Ok(QuickAnswer::default());
     }
-    let brave_key = {
+    let serper_key = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        conn.query_row("SELECT value FROM settings WHERE key='brave_api_key'", [], |r| r.get::<_, String>(0))
+        conn.query_row("SELECT value FROM settings WHERE key='serper_api_key'", [], |r| r.get::<_, String>(0))
             .ok()
             .filter(|k| !k.trim().is_empty())
     };
     let ans = tauri::async_runtime::spawn_blocking(move || {
-        // Ưu tiên Brave (phủ hết) nếu có key
-        if let Some(key) = brave_key {
-            let b = brave_search(&q, &key);
+        // Ưu tiên Serper/Google (phủ hết) nếu có key
+        if let Some(key) = serper_key {
+            let b = serper_search(&q, &key);
             if !b.answer.trim().is_empty() {
                 return b;
             }

@@ -43,8 +43,7 @@ pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             let current = config().read().ok().map(|c| c.clone()).unwrap_or_else(|| ("Alt+Space".into(), "Win+V".into()));
             if shortcut_for(&current.0).as_ref() == Some(shortcut) {
                 crate::core::window::toggle(app, "search");
-            } else if shortcut_for(&current.1).as_ref() == Some(shortcut)
-                || (current.1 == "Win+V" && shortcut_for("Ctrl+Shift+V").as_ref() == Some(shortcut)) {
+            } else if shortcut_for(&current.1).as_ref() == Some(shortcut) {
                 crate::core::window::toggle(app, "clipboard");
             } else {
                 let binding = feature_bindings().read().ok()
@@ -95,11 +94,10 @@ pub fn apply_hotkeys(
     } else {
         ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
     }
+    // Chỉ đăng ký ĐÚNG phím clipboard người dùng đặt — không có phím dự phòng.
+    // (Win+V dùng low-level hook riêng, không cần register global shortcut.)
     if let Some(sc) = shortcut_for(clipboard) {
         gs.register(sc).map_err(|e| format!("Hotkey clipboard đang bị chiếm: {e}"))?;
-    } else if clipboard == "Win+V" {
-        // Giữ Ctrl+Shift+V làm phím dự phòng khi Win+V bị policy/hook của hệ thống chặn.
-        let _ = gs.register(shortcut_for("Ctrl+Shift+V").unwrap());
     }
     let feature_hotkeys: HashMap<String, String> = serde_json::from_str(feature_hotkeys_json).unwrap_or_default();
     let keyword_overrides: HashMap<String, String> = serde_json::from_str(keywords_json).unwrap_or_default();

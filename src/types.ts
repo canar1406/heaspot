@@ -212,7 +212,7 @@ export interface AppSettings {
   clipboard_retention_days: number;
   privacy_apps: string;
   auto_paste: boolean;
-  brave_api_key: string;
+  serper_api_key: string;
   enable_browser_passwords: boolean;
   password_to_history: boolean;
   theme: string; // "system" | "light" | "dark"

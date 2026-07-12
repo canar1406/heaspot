@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { RefObject, useEffect, useRef, useState } from "react";
 import type { ClipItem } from "../types";
 import { Icon } from "./Icon";
+import { ZoomableImage } from "./ZoomableImage";
 
 interface Props {
   items: ClipItem[];
@@ -237,13 +238,7 @@ export function ClipboardView({
         </div>
 
         {sel?.kind === "image" ? (
-          <div className="flex-1 min-h-0 flex items-center justify-center p-3 overflow-hidden">
-            <img
-              src={fullImage || sel.thumb}
-              alt=""
-              className="max-w-full max-h-full object-contain rounded-lg border border-black/10 dark:border-white/10"
-            />
-          </div>
+          <ZoomableImage src={fullImage || sel.thumb} />
         ) : (
           <textarea
             ref={textareaRef}

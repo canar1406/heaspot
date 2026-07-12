@@ -17,8 +17,8 @@ pub struct Settings {
     pub clipboard_retention_days: u32,
     pub privacy_apps: String,
     pub auto_paste: bool,
-    // Brave Search API key (tùy chọn) — có key thì `g` phủ mọi truy vấn web
-    pub brave_api_key: String,
+    // Serper.dev (Google SERP) key (tùy chọn) — có key thì `g` phủ mọi truy vấn web
+    pub serper_api_key: String,
     // Tính năng nhạy cảm — mặc định tắt, người dùng tự bật
     pub enable_browser_passwords: bool,
     // Có lưu mật khẩu vào clipboard history khi copy không (mặc định KHÔNG)
@@ -43,7 +43,7 @@ pub fn load(conn: &rusqlite::Connection) -> Settings {
         clipboard_retention_days: value(conn, "clipboard_retention_days", "0").parse().unwrap_or(0).min(3650),
         privacy_apps: value(conn, "privacy_apps", "keepass,bitwarden,1password,lastpass,dashlane,protonpass"),
         auto_paste: value(conn, "auto_paste", "true") == "true",
-        brave_api_key: value(conn, "brave_api_key", ""),
+        serper_api_key: value(conn, "serper_api_key", ""),
         enable_browser_passwords: value(conn, "enable_browser_passwords", "false") == "true",
         password_to_history: value(conn, "password_to_history", "false") == "true",
         theme: value(conn, "theme", "system"),
@@ -85,7 +85,7 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
         ("clipboard_retention_days", settings.clipboard_retention_days.to_string()),
         ("privacy_apps", settings.privacy_apps.clone()),
         ("auto_paste", settings.auto_paste.to_string()),
-        ("brave_api_key", settings.brave_api_key.clone()),
+        ("serper_api_key", settings.serper_api_key.clone()),
         ("enable_browser_passwords", settings.enable_browser_passwords.to_string()),
         ("password_to_history", settings.password_to_history.to_string()),
         ("theme", settings.theme.clone()),

@@ -525,9 +525,9 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
             }
           : {
               id: "g:answer", title: `Không có kết quả nhanh cho "${gArg}"`,
-              subtitle: "Thêm Brave API key trong Settings để phủ hết · hoặc mở Google",
+              subtitle: "Thêm Serper.dev API key trong Settings để phủ hết · hoặc mở Google",
               kind: "knowledge", action: "google", text: "",
-              preview: `Không tìm được tóm tắt nhanh cho “${gArg}”.\n\nĐể phủ MỌI truy vấn (kể cả sản phẩm/tin niche): mở Settings → dán Brave Search API key (miễn phí, brave.com/search/api).\n\nHoặc chọn “Tìm chi tiết trên Google” để xem đầy đủ.`,
+              preview: `Không tìm được tóm tắt nhanh cho “${gArg}”.\n\nĐể phủ MỌI truy vấn (kể cả sản phẩm/tin niche): mở Settings → dán Serper.dev API key (miễn phí 2500 lượt, KHÔNG cần thẻ, tại serper.dev).\n\nHoặc chọn “Tìm chi tiết trên Google” để xem đầy đủ.`,
             };
         setResults([answerItem, detailItem]);
       }, 130);
