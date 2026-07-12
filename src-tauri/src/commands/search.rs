@@ -364,11 +364,14 @@ try {
         })
         .filter(|h| !h.path.is_empty())
         .collect::<Vec<_>>();
-    if let Ok(mut c) = fulltext_cache().lock() {
-        if c.len() >= 300 {
-            c.clear();
+    // Chỉ cache khi có kết quả (tránh kẹt cache rỗng do lỗi nhất thời)
+    if !hits.is_empty() {
+        if let Ok(mut c) = fulltext_cache().lock() {
+            if c.len() >= 300 {
+                c.clear();
+            }
+            c.insert(key, hits.clone());
         }
-        c.insert(key, hits.clone());
     }
     Ok(hits)
 }

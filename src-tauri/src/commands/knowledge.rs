@@ -268,11 +268,14 @@ pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String
     })
     .await
     .map_err(|e| e.to_string())?;
-    if let Ok(mut c) = wiki_cache().lock() {
-        if c.len() >= 300 {
-            c.clear();
+    // CHỈ cache khi có kết quả — tránh cache rỗng do lỗi mạng nhất thời rồi kẹt mãi
+    if !hits.is_empty() {
+        if let Ok(mut c) = wiki_cache().lock() {
+            if c.len() >= 300 {
+                c.clear();
+            }
+            c.insert(key, hits.clone());
         }
-        c.insert(key, hits.clone());
     }
     Ok(hits)
 }

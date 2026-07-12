@@ -196,22 +196,32 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url,
       }));
       const t = setTimeout(() => {
-        let fullDone = false;
-        const showErr = (where: string, err: unknown) => fresh(() => setResults([{
-          id: "knowledge:err", title: `Wikipedia lỗi (${where})`, subtitle: String(err),
-          kind: "knowledge", text: "", preview: `Lỗi khi tra “${wikiArg}” (${where}):\n${String(err)}`, action: "translate",
-        }]));
-        // PHA 1: tiêu đề + snippet nhanh -> hiện tức thì
+        let fullDone = false;   // pha 2 (extract đầy đủ) đã về CHƯA
+        let titleCount = 0;     // số kết quả pha 1 (titles+snippet) đang hiện
+        // PHA 1: tiêu đề + snippet nhanh -> hiện tức thì (làm nền tin cậy)
         invoke<KnowledgeHit[]>("wiki_titles", { query: wikiArg })
-          .then((hits) => { if (!fullDone && hits.length) fresh(() => setResults(mapHits(hits))); })
-          .catch((e) => showErr("titles", e));
-        // PHA 2: extract intro đầy đủ -> thay khi xong (giữ nguyên chi tiết)
+          .then((hits) => {
+            if (fullDone || !hits.length) return;
+            titleCount = hits.length;
+            fresh(() => setResults(mapHits(hits)));
+          })
+          .catch(() => {});
+        // PHA 2: extract intro đầy đủ. CHỈ thay khi có dữ liệu; rỗng thì GIỮ pha 1.
         invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg })
-          .then((hits) => { fullDone = true; fresh(() => setResults(hits.length ? mapHits(hits) : [{
-            id: "knowledge:empty", title: `Không có kết quả Wikipedia cho “${wikiArg}”`,
-            subtitle: "Thử từ khoá khác", kind: "knowledge", text: "", preview: "", action: "translate",
-          }])); })
-          .catch((e) => { fullDone = true; showErr("extract", e); });
+          .then((hits) => {
+            fullDone = true;
+            if (hits.length) {
+              fresh(() => setResults(mapHits(hits)));
+            } else if (titleCount === 0) {
+              // cả 2 pha đều rỗng -> mới báo không có kết quả
+              fresh(() => setResults([{
+                id: "knowledge:empty", title: `Không có kết quả Wikipedia cho “${wikiArg}”`,
+                subtitle: "Thử từ khoá khác", kind: "knowledge", text: "", preview: "", action: "translate",
+              }]));
+            }
+            // else: extract rỗng nhưng pha 1 có titles -> giữ nguyên titles
+          })
+          .catch(() => { fullDone = true; }); // lỗi extract -> giữ pha 1
       }, 130);
       return () => clearTimeout(t);
     }
