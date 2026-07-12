@@ -179,16 +179,75 @@ fn fetch_collocations(word: &str) -> Vec<String> {
     out
 }
 
-/// Tra Wikipedia tiếng Việt (native ureq).
+fn wiki_cache() -> &'static Mutex<HashMap<String, Vec<KnowledgeHit>>> {
+    static C: OnceLock<Mutex<HashMap<String, Vec<KnowledgeHit>>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// PHA 1 — nhanh: chỉ lấy tiêu đề + snippet ngắn qua list=search (không sinh extract).
+/// Cho hiện kết quả tức thì rồi wikipedia_search bổ sung nội dung đầy đủ.
 #[tauri::command]
-pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String> {
+pub async fn wiki_titles(query: String) -> Result<Vec<KnowledgeHit>, String> {
     let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(Vec::new());
     }
     let hits = tauri::async_runtime::spawn_blocking(move || {
         let url = format!(
-            "https://vi.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&inprop=url&format=json&utf8=1",
+            "https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={}&srlimit=5&srprop=snippet&format=json&utf8=1",
+            urlencoding(&q)
+        );
+        let Some(v) = http_json(&url) else { return Vec::new() };
+        let mut out = Vec::new();
+        if let Some(arr) = v.get("query").and_then(|x| x.get("search")).and_then(|x| x.as_array()) {
+            for s in arr {
+                let title = s.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                // snippet có thẻ HTML <span> -> bỏ thẻ
+                let snippet_raw = s.get("snippet").and_then(|x| x.as_str()).unwrap_or("");
+                let snippet = strip_html(snippet_raw);
+                if title.is_empty() {
+                    continue;
+                }
+                let url = format!("https://vi.wikipedia.org/wiki/{}", urlencoding(&title.replace(' ', "_")));
+                out.push(KnowledgeHit { title, extract: snippet, url });
+            }
+        }
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(hits)
+}
+
+fn strip_html(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&quot;", "\"").replace("&amp;", "&").replace("&nbsp;", " ").trim().to_string()
+}
+
+/// PHA 2 — đầy đủ: extract intro hoàn chỉnh (giữ nguyên độ chi tiết). Có cache.
+#[tauri::command]
+pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let key = q.to_lowercase();
+    if let Some(hits) = wiki_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hits);
+    }
+    let hits = tauri::async_runtime::spawn_blocking(move || {
+        // exlimit=max -> lấy extract intro ĐẦY ĐỦ cho cả 5 kết quả (không cắt bớt).
+        let url = format!(
+            "https://vi.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&exlimit=max&inprop=url&format=json&utf8=1",
             urlencoding(&q)
         );
         let Some(v) = http_json(&url) else { return Vec::new() };
@@ -209,6 +268,12 @@ pub async fn wikipedia_search(query: String) -> Result<Vec<KnowledgeHit>, String
     })
     .await
     .map_err(|e| e.to_string())?;
+    if let Ok(mut c) = wiki_cache().lock() {
+        if c.len() >= 300 {
+            c.clear();
+        }
+        c.insert(key, hits.clone());
+    }
     Ok(hits)
 }
 
@@ -228,6 +293,63 @@ fn urlencoding(s: &str) -> String {
 fn translate_cache() -> &'static Mutex<HashMap<String, TranslationHit>> {
     static C: OnceLock<Mutex<HashMap<String, TranslationHit>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Serialize, Clone)]
+pub struct QuickTranslation {
+    pub translation: String,
+    pub source_language: String,
+    pub target_language: String,
+}
+
+fn quick_cache() -> &'static Mutex<HashMap<String, QuickTranslation>> {
+    static C: OnceLock<Mutex<HashMap<String, QuickTranslation>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Dịch NHANH: chỉ 1 request Google -> hiện bản dịch tức thì (~0.3s),
+/// chi tiết từ điển tải sau bằng translate_lookup. Có cache riêng.
+#[tauri::command]
+pub async fn quick_translate(query: String) -> Result<QuickTranslation, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Err("nội dung dịch trống".into());
+    }
+    let key = q.to_lowercase();
+    // Ưu tiên cache đầy đủ nếu đã có, nếu không thì cache nhanh
+    if let Some(full) = translate_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(QuickTranslation {
+            translation: full.translation,
+            source_language: full.source_language,
+            target_language: full.target_language,
+        });
+    }
+    if let Some(hit) = quick_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hit);
+    }
+    let hit = tauri::async_runtime::spawn_blocking(move || {
+        let first = google_translate(&q, "auto", "vi").ok_or("dịch vụ dịch không phản hồi")?;
+        let detected = first.get(2).and_then(|x| x.as_str()).unwrap_or("auto").to_string();
+        let target = if detected == "vi" { "en".to_string() } else { "vi".to_string() };
+        let translation = if target == "vi" {
+            gt_text(&first)
+        } else {
+            google_translate(&q, "auto", &target).map(|v| gt_text(&v)).unwrap_or_default()
+        };
+        if translation.trim().is_empty() {
+            return Err("dịch vụ dịch không trả về kết quả".to_string());
+        }
+        Ok::<_, String>(QuickTranslation { translation, source_language: detected, target_language: target })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if let Ok(mut c) = quick_cache().lock() {
+        if c.len() >= 1000 {
+            c.clear();
+        }
+        c.insert(key, hit.clone());
+    }
+    Ok(hit)
 }
 
 /// Smart Translate — native ureq + chạy song song translate/dictionary/datamuse.

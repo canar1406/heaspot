@@ -18,6 +18,7 @@ import type {
   FullTextHit,
   KnowledgeHit,
   TranslationHit,
+  QuickTranslation,
   OpenWindowInfo,
   ProcInfo,
   RegKeyInfo,
@@ -189,53 +190,71 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         id: "knowledge:loading", title: "Đang tra Wikipedia…", subtitle: wikiArg,
         kind: "knowledge", text: "", preview: `Đang tải khái niệm “${wikiArg}”…`, action: "loading",
       }]);
-      const t = setTimeout(async () => {
-        try {
-          const hits = await invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg });
-          fresh(() => setResults(hits.map((h, i) => ({
-            id: `knowledge:${i}:${h.title}`, title: h.title,
-            subtitle: h.extract.length > 120 ? `${h.extract.slice(0, 120)}…` : h.extract,
-            kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url,
-          }))));
-        } catch { fresh(() => setResults([])); }
-      }, 260);
+      const mapHits = (hits: KnowledgeHit[]) => hits.map((h, i) => ({
+        id: `knowledge:${i}:${h.title}`, title: h.title,
+        subtitle: h.extract.length > 120 ? `${h.extract.slice(0, 120)}…` : h.extract,
+        kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url,
+      }));
+      const t = setTimeout(() => {
+        let fullDone = false;
+        // PHA 1: tiêu đề + snippet nhanh -> hiện tức thì
+        invoke<KnowledgeHit[]>("wiki_titles", { query: wikiArg })
+          .then((hits) => { if (!fullDone && hits.length) fresh(() => setResults(mapHits(hits))); })
+          .catch(() => {});
+        // PHA 2: extract intro đầy đủ -> thay khi xong (giữ nguyên chi tiết)
+        invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg })
+          .then((hits) => { fullDone = true; fresh(() => setResults(mapHits(hits))); })
+          .catch(() => {});
+      }, 130);
       return () => clearTimeout(t);
     }
 
     const trArg = matchWord(q, kw.translate);
     if (trArg) {
       setResults([{
-        id: "translate:loading", title: "Đang dịch và tra từ điển…", subtitle: trArg,
-        kind: "knowledge", text: "", preview: `Đang nhận diện ngôn ngữ và tìm thông tin cho “${trArg}”…`, action: "translate",
+        id: "translate:loading", title: "Đang dịch…", subtitle: trArg,
+        kind: "knowledge", text: "", preview: `Đang dịch “${trArg}”…`, action: "translate",
       }]);
-      const t = setTimeout(async () => {
-        try {
-          const hit = await invoke<TranslationHit>("translate_lookup", { query: trArg });
-          const details = hit.entries.map((e, i) => {
-            const example = e.example ? `\n   Ví dụ: ${e.example}` : "";
-            return `${i + 1}. [${e.part_of_speech || "meaning"}] ${e.definition_en}\n   VI: ${e.definition_vi}${example}`;
-          }).join("\n\n");
-          const preview = [
-            `Bản dịch (${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()}):\n${hit.translation}`,
-            hit.phonetic ? `Phát âm: ${hit.phonetic}` : "",
-            hit.collocations.length ? `Collocations:\n${hit.collocations.join(" · ")}` : "",
-            hit.synonyms.length ? `Đồng nghĩa: ${hit.synonyms.join(", ")}` : "",
-            hit.antonyms.length ? `Trái nghĩa: ${hit.antonyms.join(", ")}` : "",
-            details ? `Word forms & meanings:\n${details}` : "",
-          ].filter(Boolean).join("\n\n");
-          fresh(() => setResults([{
-            id: `translate:${trArg}`, title: hit.translation,
-            subtitle: `${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()} · Enter để dán`,
-            kind: "knowledge", text: hit.translation, preview, keyword: trArg,
-            audio: hit.audio_url || undefined, action: "translate",
-          }]));
-        } catch (err) {
-          fresh(() => setResults([{
-            id: "translate:error", title: "Không dịch được nội dung", subtitle: String(err),
-            kind: "knowledge", text: "", preview: String(err), action: "translate",
-          }]));
-        }
-      }, 350);
+      const t = setTimeout(() => {
+        let fullDone = false;
+        // PHA 1: bản dịch nhanh (1 request) -> hiện tức thì
+        invoke<QuickTranslation>("quick_translate", { query: trArg })
+          .then((qt) => {
+            if (fullDone) return; // chi tiết đã về -> không ghi đè
+            fresh(() => setResults([{
+              id: `translate:${trArg}`, title: qt.translation,
+              subtitle: `${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()} · Enter để dán · đang tải chi tiết…`,
+              kind: "knowledge", text: qt.translation,
+              preview: `Bản dịch (${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()}):\n${qt.translation}\n\nĐang tải phát âm, định nghĩa, collocations…`,
+              keyword: trArg, action: "translate",
+            }]));
+          })
+          .catch(() => {});
+        // PHA 2: chi tiết đầy đủ (từ điển, định nghĩa, collocations) -> thay khi xong
+        invoke<TranslationHit>("translate_lookup", { query: trArg })
+          .then((hit) => {
+            fullDone = true;
+            const details = hit.entries.map((e, i) => {
+              const example = e.example ? `\n   Ví dụ: ${e.example}` : "";
+              return `${i + 1}. [${e.part_of_speech || "meaning"}] ${e.definition_en}\n   VI: ${e.definition_vi}${example}`;
+            }).join("\n\n");
+            const preview = [
+              `Bản dịch (${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()}):\n${hit.translation}`,
+              hit.phonetic ? `Phát âm: ${hit.phonetic}` : "",
+              hit.collocations.length ? `Collocations:\n${hit.collocations.join(" · ")}` : "",
+              hit.synonyms.length ? `Đồng nghĩa: ${hit.synonyms.join(", ")}` : "",
+              hit.antonyms.length ? `Trái nghĩa: ${hit.antonyms.join(", ")}` : "",
+              details ? `Word forms & meanings:\n${details}` : "",
+            ].filter(Boolean).join("\n\n");
+            fresh(() => setResults([{
+              id: `translate:${trArg}`, title: hit.translation,
+              subtitle: `${hit.source_language.toUpperCase()} → ${hit.target_language.toUpperCase()} · Enter để dán`,
+              kind: "knowledge", text: hit.translation, preview, keyword: trArg,
+              audio: hit.audio_url || undefined, action: "translate",
+            }]));
+          })
+          .catch(() => {});
+      }, 130);
       return () => clearTimeout(t);
     }
 
