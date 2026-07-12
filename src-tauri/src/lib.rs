@@ -103,6 +103,7 @@ pub fn run() {
             commands::clipboard::update_clipboard_item,
             commands::clipboard::delete_clipboard_item,
             commands::clipboard::clear_clipboard_history,
+            commands::clipboard::clear_cache,
             commands::snippets::get_snippets,
             commands::snippets::add_snippet,
             commands::snippets::delete_snippet,

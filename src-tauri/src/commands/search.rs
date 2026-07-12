@@ -101,6 +101,43 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
     needle.chars().all(|c| it.any(|h| h == c))
 }
 
+/// Everything index cả kho thành phần Windows/Store. Các đường dẫn này không
+/// phải file người dùng muốn mở từ launcher và tạo hàng chục kết quả trùng app.
+fn is_search_noise(path: &str) -> bool {
+    let p = path.replace('/', "\\").to_lowercase();
+    [
+        "\\windows\\winsxs\\",
+        "\\windows\\servicing\\",
+        "\\windows\\systemapps\\",
+        "\\windows\\assembly\\",
+        "\\windows\\installer\\",
+        "\\program files\\windowsapps\\",
+        "\\appdata\\local\\microsoft\\windowsapps\\",
+        "\\programdata\\microsoft\\windows\\apprepository\\packages\\",
+        "\\programdata\\packages\\",
+        "\\$recycle.bin\\",
+        "\\system volume information\\",
+    ]
+    .iter()
+    .any(|part| p.contains(part))
+}
+
+/// `in` là tìm nội dung tài liệu, không phải quét chuỗi nhị phân trong EXE/DLL.
+fn is_fulltext_document(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "txt" | "md" | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
+            | "csv" | "rtf" | "log" | "ini" | "json" | "xml" | "html" | "htm"
+            | "yaml" | "yml" | "toml" | "py" | "js" | "jsx" | "ts" | "tsx"
+            | "rs" | "c" | "cc" | "cpp" | "h" | "hpp" | "java" | "cs" | "sql"
+    )
+}
+
 /// Tìm kiếm chính: App (Start Menu/Registry) + File (Everything hoặc index nội bộ)
 #[tauri::command]
 pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> SearchResponse {
@@ -120,10 +157,14 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
             .filter_map(|a| {
                 score_match(&a.name, &query).map(|s| SearchResult {
                     title: a.name.clone(),
-                    subtitle: a.path.clone(),
+                    subtitle: if a.path.starts_with("shell:AppsFolder\\") {
+                        "Ứng dụng Windows".into()
+                    } else {
+                        a.path.clone()
+                    },
                     kind: "app".into(),
                     path: a.path.clone(),
-                    score: s + 100, // ưu tiên app hơn file
+                    score: s + 200, // ưu tiên app lên đầu, cao hơn file/folder
                     icon: a.icon.clone(),
                 })
             })
@@ -138,6 +179,9 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
     if let Some(hits) = everything().as_ref().and_then(|e| e.search(&query, 12)) {
         engine = "everything".into();
         for (path, is_dir) in hits {
+            if is_search_noise(&path) {
+                continue;
+            }
             let name = std::path::Path::new(&path)
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
@@ -282,6 +326,13 @@ fn fulltext_cache() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
     C.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
+/// Xoá cache full-text (dùng cho Clear cache trong Settings).
+pub fn clear_fulltext_cache() {
+    if let Ok(mut m) = fulltext_cache().lock() {
+        m.clear();
+    }
+}
+
 /// Tìm nội dung bên trong file (Word, PDF, Excel...) qua Windows Search Index.
 /// Chạy PowerShell ẩn để query OLE DB — tránh phải bind COM trực tiếp.
 #[tauri::command]
@@ -362,7 +413,7 @@ try {
                     .to_string(),
             })
         })
-        .filter(|h| !h.path.is_empty())
+        .filter(|h| !h.path.is_empty() && is_fulltext_document(&h.path) && !is_search_noise(&h.path))
         .collect::<Vec<_>>();
     // Chỉ cache khi có kết quả (tránh kẹt cache rỗng do lỗi nhất thời)
     if !hits.is_empty() {
@@ -374,4 +425,24 @@ try {
         }
     }
     Ok(hits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_fulltext_document, is_search_noise};
+
+    #[test]
+    fn filters_windows_component_and_store_package_paths() {
+        assert!(is_search_noise(r"C:\Windows\WinSxS\amd64_notepad.resources"));
+        assert!(is_search_noise(r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_1.0"));
+        assert!(!is_search_noise(r"C:\Users\Lan\Documents\notepad-notes.txt"));
+    }
+
+    #[test]
+    fn fulltext_accepts_documents_but_rejects_binaries() {
+        assert!(is_fulltext_document(r"C:\Users\Lan\Documents\report.docx"));
+        assert!(is_fulltext_document(r"C:\Users\Lan\code\main.rs"));
+        assert!(!is_fulltext_document(r"C:\Program Files\Internet Explorer\IEDIAGCMD.EXE"));
+        assert!(!is_fulltext_document(r"C:\Windows\System32\helper.dll"));
+    }
 }

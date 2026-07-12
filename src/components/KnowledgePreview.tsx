@@ -37,7 +37,7 @@ export function KnowledgePreview({ item, onPaste, onCopy, onOpen, onSave, onTran
           {item.action === "translate" ? "Smart Translate · dictionary & meanings"
             : item.action === "formula" ? "Formula · biến số & đơn vị"
               : item.action === "review" ? "Danh sách ôn tập"
-                : item.action === "ocr" ? "Windows OCR · sửa trực tiếp · Enter để copy"
+                : item.action === "ocr" ? "Tesseract vie+eng · OCR offline · sửa trực tiếp · Enter để copy"
                   : item.action === "google" ? "Kết quả nhanh · Google / DuckDuckGo"
                     : "Wikipedia · xem nhanh"}
         </div>

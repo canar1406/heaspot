@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { KW_FEATURES, resolveKeywords, DEFAULT_KEYWORDS, type KwMap } from "../keywords";
 import { applyTheme } from "../theme";
@@ -31,6 +31,11 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
   const [featureHotkeys, setFeatureHotkeys] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
 
   useEffect(() => {
     invoke<AppSettings>("get_settings")
@@ -119,7 +124,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div ref={mainRef} className="flex-1 overflow-y-auto p-6 space-y-5">
           {tab === "general" && (
             <>
               <Section title="Hotkey mở nhanh">
@@ -179,6 +184,29 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                   Tự khởi động HeaSpot cùng Windows
                 </label>
               </Section>
+
+              <Section title="Dọn cache toàn app">
+                <div className="text-[11.5px] text-zinc-500 dark:text-zinc-400">
+                  Xoá <b>toàn bộ cache tra cứu</b> của mọi tính năng trong RAM — dịch, tra nhanh,
+                  Wikipedia, kết quả Google, full-text Windows Search, Capacities, icon app/file — và
+                  các ảnh clip tạm mồ côi trên đĩa. <b>Không</b> đụng tới clipboard history, snippet
+                  hay cấu hình đã lưu. Dành cho người dùng lâu ngày muốn dọn dẹp.
+                </div>
+                <button
+                  onClick={async () => {
+                    setStatus("Đang dọn cache…");
+                    try {
+                      const msg = await invoke<string>("clear_cache");
+                      setStatus(`✓ ${msg}`);
+                    } catch (e) {
+                      setStatus(String(e));
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-amber-600 text-white text-[13px]"
+                >
+                  🧹 Dọn toàn bộ cache ngay
+                </button>
+              </Section>
             </>
           )}
 
@@ -215,13 +243,13 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                               {f.kind === "prefix" ? "ký tự đầu" : "từ khóa"} · vd: {f.example}
                             </span>
                           </div>
-                          <div className="mt-2 flex items-center gap-2">
+                          <div className="mt-2 grid grid-cols-[4rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
                             <span className="text-[10px] text-zinc-400 w-16 shrink-0">Hotkey</span>
                             <HotkeyCapture
                               value={featureHotkeys[f.id] || ""}
                               onChange={(hotkey) => setFeatureHotkeys({ ...featureHotkeys, [f.id]: hotkey })}
                             />
-                            <span className="text-[10px] text-zinc-400">Bôi đen text → nhấn hotkey để mở thẳng</span>
+                            <span className="col-span-2 text-[10px] leading-relaxed text-zinc-400">Bôi đen text → nhấn hotkey để mở thẳng</span>
                           </div>
                         </div>
                       );
@@ -319,7 +347,7 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
       value={value}
       placeholder="Click rồi nhấn phím"
       title="Backspace/Delete để xóa hotkey"
-      className="w-36 rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 px-2 py-1 text-[11px] font-mono outline-none focus:border-blue-500/60"
+      className="w-full min-w-0 rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 px-2 py-1 text-[11px] font-mono outline-none focus:border-blue-500/60"
       onKeyDown={(e) => {
         e.preventDefault();
         e.stopPropagation();

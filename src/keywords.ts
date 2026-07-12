@@ -29,7 +29,7 @@ export const KW_FEATURES: KwFeature[] = [
   { id: "youtube", label: "Tìm YouTube", def: "yt", kind: "word", example: "yt lofi", group: "Tìm kiếm & tri thức" },
   // Tiện ích
   { id: "ocr", label: "Chụp màn hình & nhận chữ (OCR)", def: "ocr", kind: "word", example: "ocr", group: "Tiện ích" },
-  { id: "convert", label: "Đổi đơn vị / cơ số", def: "conv", kind: "word", example: "conv 255 dec to hex", group: "Tiện ích" },
+  { id: "convert", label: "Đổi đơn vị (dài, khối lượng, tốc độ, áp suất…) / cơ số", def: "conv", kind: "word", example: "conv 60 km/h to m/s", group: "Tiện ích" },
   { id: "time", label: "Giờ thế giới", def: "time", kind: "word", example: "time tokyo", group: "Tiện ích" },
   { id: "url", label: "Mở URL", def: "url", kind: "word", example: "url github.com", group: "Tiện ích" },
   { id: "password", label: "Mật khẩu trình duyệt (bật trong Settings)", def: "pw", kind: "word", example: "pw github", group: "Tiện ích" },

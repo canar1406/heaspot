@@ -3,6 +3,14 @@ use std::path::PathBuf;
 
 /// Đường dẫn DB: %APPDATA%\heaspot\heaspot.db
 pub fn db_path() -> PathBuf {
+    // Cho smoke test/documentation chạy bằng profile tạm, tuyệt đối không đọc
+    // clipboard/settings thật. Bản phát hành bình thường không đặt biến này.
+    if let Ok(dir) = std::env::var("HEASPOT_DATA_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("heaspot.db");
+        }
+    }
     let base = dirs::data_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));

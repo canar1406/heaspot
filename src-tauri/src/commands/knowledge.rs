@@ -394,6 +394,10 @@ pub async fn quick_answer(
     if q.is_empty() {
         return Ok(QuickAnswer::default());
     }
+    let key = q.to_lowercase();
+    if let Some(hit) = quick_answer_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hit);
+    }
     let serper_key = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         conn.query_row("SELECT value FROM settings WHERE key='serper_api_key'", [], |r| r.get::<_, String>(0))
@@ -444,7 +448,28 @@ pub async fn quick_answer(
     })
     .await
     .map_err(|e| e.to_string())?;
+    if !ans.answer.trim().is_empty() {
+        if let Ok(mut c) = quick_answer_cache().lock() {
+            if c.len() >= 500 {
+                c.clear();
+            }
+            c.insert(key, ans.clone());
+        }
+    }
     Ok(ans)
+}
+
+fn quick_answer_cache() -> &'static Mutex<HashMap<String, QuickAnswer>> {
+    static C: OnceLock<Mutex<HashMap<String, QuickAnswer>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Xoá toàn bộ cache tra cứu trong RAM (dịch, wiki, quick answer).
+pub fn clear_caches() {
+    if let Ok(mut m) = translate_cache().lock() { m.clear(); }
+    if let Ok(mut m) = quick_cache().lock() { m.clear(); }
+    if let Ok(mut m) = wiki_cache().lock() { m.clear(); }
+    if let Ok(mut m) = quick_answer_cache().lock() { m.clear(); }
 }
 
 /// Cache dịch trong RAM (theo phiên) — tra lại từ cũ là tức thì, không gọi mạng.

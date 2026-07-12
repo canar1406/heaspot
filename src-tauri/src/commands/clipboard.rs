@@ -568,6 +568,47 @@ pub fn delete_clipboard_item(
         .map_err(|e| e.to_string())
 }
 
+/// Clear cache (Settings): xoá TOÀN BỘ cache của app trong RAM + ảnh clip mồ côi
+/// trên đĩa. Gom mọi cache tra cứu của mọi tính năng, không riêng clipboard.
+/// KHÔNG đụng vào clipboard history / snippets / settings của người dùng.
+#[tauri::command]
+pub fn clear_cache(state: tauri::State<'_, crate::AppState>) -> Result<String, String> {
+    use std::collections::HashSet;
+    crate::commands::knowledge::clear_caches(); // dịch, tra nhanh, wiki, Google
+    crate::commands::search::clear_fulltext_cache(); // full-text Windows Search
+    crate::commands::capacities::clear_spaces_cache(); // spaceIds Capacities
+    crate::core::indexer::clear_icon_cache(); // icon app/file
+
+    let referenced: HashSet<PathBuf> = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.prepare("SELECT content FROM clipboard WHERE kind = 'image'")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.flatten().map(PathBuf::from).collect())
+            })
+            .unwrap_or_default()
+    };
+    let mut freed: u64 = 0;
+    let mut count = 0u32;
+    if let Ok(entries) = std::fs::read_dir(crate::db::clips_dir()) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_file() && !referenced.contains(&p) {
+                if let Ok(meta) = e.metadata() {
+                    freed += meta.len();
+                }
+                if std::fs::remove_file(&p).is_ok() {
+                    count += 1;
+                }
+            }
+        }
+    }
+    let mb = freed as f64 / 1_048_576.0;
+    Ok(format!(
+        "Đã dọn toàn bộ cache: dịch, tra nhanh, Wikipedia, Google, full-text, Capacities, icon + {count} ảnh tạm ({mb:.1} MB)."
+    ))
+}
+
 /// Clear All — GIỮ LẠI các item đã pin (học từ Windows Clipboard)
 #[tauri::command]
 pub fn clear_clipboard_history(state: tauri::State<'_, crate::AppState>) -> Result<(), String> {

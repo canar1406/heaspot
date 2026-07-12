@@ -21,6 +21,13 @@ fn spaces_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Xoá cache spaceIds Capacities (dùng cho Clear cache trong Settings).
+pub fn clear_spaces_cache() {
+    if let Ok(mut m) = spaces_cache().lock() {
+        m.clear();
+    }
+}
+
 fn read_token(conn: &rusqlite::Connection) -> Option<String> {
     conn.query_row(
         "SELECT value FROM settings WHERE key = 'capacities_token'",

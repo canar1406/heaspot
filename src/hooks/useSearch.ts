@@ -439,6 +439,7 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
             kind: "fulltext" as const, path: h.path,
           })));
         }
+        const actualResultCount = list.length;
         if (!hasCapToken) {
           list.push({
             id: "cap:hint", title: "Kết nối Capacities để tìm trong note",
@@ -446,8 +447,8 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
             kind: "cap-token", text: "",
           });
         }
-        if (list.length === 0) {
-          list.push({
+        if (actualResultCount === 0) {
+          list.unshift({
             id: "ft:empty", title: `Không tìm thấy nội dung "${ftArg}"`,
             subtitle: "Windows Search Index chỉ quét các thư mục đã được index", kind: "fulltext", path: "",
           });
@@ -498,38 +499,37 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         { id: "g:loading", title: `Đang lấy kết quả nhanh cho "${gArg}"…`, kind: "knowledge", action: "google", text: "", preview: `Đang tra nhanh “${gArg}”…` },
         detailItem,
       ]);
-      const t = setTimeout(async () => {
-        const [qa, wiki] = await Promise.allSettled([
-          invoke<QuickAnswer>("quick_answer", { query: gArg }),
-          invoke<KnowledgeHit[]>("wikipedia_search", { query: gArg }),
-        ]);
-        if (seq.current !== mySeq) return;
-        let answer = "";
-        let source = "";
-        let url = "";
-        if (qa.status === "fulfilled" && qa.value.answer.trim()) {
-          answer = qa.value.answer;
-          source = qa.value.source || "DuckDuckGo";
-          url = qa.value.url || "";
-          if (qa.value.related.length) answer += `\n\nLiên quan:\n• ${qa.value.related.join("\n• ")}`;
-        } else if (wiki.status === "fulfilled" && wiki.value.length) {
-          answer = wiki.value[0].extract;
-          source = "Wikipedia";
-          url = wiki.value[0].url;
-        }
-        const answerItem: ResultItemData = answer
-          ? {
-              id: "g:answer", title: `Kết quả nhanh: ${gArg}`,
-              subtitle: `Nguồn: ${source} · Enter để copy`,
-              kind: "knowledge", action: "google", text: answer, preview: answer, url,
+      const mkAnswer = (answer: string, source: string, url: string): ResultItemData => ({
+        id: "g:answer", title: `Kết quả nhanh: ${gArg}`,
+        subtitle: `Nguồn: ${source} · Enter để copy`,
+        kind: "knowledge", action: "google", text: answer, preview: answer, url,
+      });
+      const emptyItem: ResultItemData = {
+        id: "g:answer", title: `Không có kết quả nhanh cho "${gArg}"`,
+        subtitle: "Thêm Serper.dev API key trong Settings để phủ hết · hoặc mở Google",
+        kind: "knowledge", action: "google", text: "",
+        preview: `Không tìm được tóm tắt nhanh cho “${gArg}”.\n\nĐể phủ MỌI truy vấn: mở Settings → dán Serper.dev API key (miễn phí 2500 lượt, không cần thẻ, serper.dev).\n\nHoặc chọn “Tìm chi tiết trên Google”.`,
+      };
+      const t = setTimeout(() => {
+        // Hiện Serper NGAY khi có (nhanh ~0.5s); Wikipedia chỉ chạy khi Serper rỗng.
+        invoke<QuickAnswer>("quick_answer", { query: gArg })
+          .then((qa) => {
+            if (seq.current !== mySeq) return;
+            if (qa.answer.trim()) {
+              let answer = qa.answer;
+              if (qa.related?.length) answer += `\n\nLiên quan:\n• ${qa.related.join("\n• ")}`;
+              setResults([mkAnswer(answer, qa.source || "Web", qa.url || ""), detailItem]);
+              return;
             }
-          : {
-              id: "g:answer", title: `Không có kết quả nhanh cho "${gArg}"`,
-              subtitle: "Thêm Serper.dev API key trong Settings để phủ hết · hoặc mở Google",
-              kind: "knowledge", action: "google", text: "",
-              preview: `Không tìm được tóm tắt nhanh cho “${gArg}”.\n\nĐể phủ MỌI truy vấn (kể cả sản phẩm/tin niche): mở Settings → dán Serper.dev API key (miễn phí 2500 lượt, KHÔNG cần thẻ, tại serper.dev).\n\nHoặc chọn “Tìm chi tiết trên Google” để xem đầy đủ.`,
-            };
-        setResults([answerItem, detailItem]);
+            // Serper/DDG rỗng -> fallback Wikipedia
+            invoke<KnowledgeHit[]>("wikipedia_search", { query: gArg })
+              .then((wiki) => {
+                if (seq.current !== mySeq) return;
+                setResults([wiki.length ? mkAnswer(wiki[0].extract, "Wikipedia", wiki[0].url) : emptyItem, detailItem]);
+              })
+              .catch(() => { if (seq.current === mySeq) setResults([emptyItem, detailItem]); });
+          })
+          .catch(() => { if (seq.current === mySeq) setResults([emptyItem, detailItem]); });
       }, 130);
       return () => clearTimeout(t);
     }

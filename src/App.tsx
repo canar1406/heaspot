@@ -223,8 +223,17 @@ export default function App() {
     }
     const el = panelRef.current;
     if (!el) return;
-    apply(900, Math.max(Math.min(Math.round(el.scrollHeight), 640), 72));
-  }, [visibleResults.length, mode, showKnowledge, detailTrigger]);
+    const contentHeight = Math.max(Math.min(Math.round(el.scrollHeight), 640), 72);
+    if (ctxOpen) {
+      const actionCount = visibleResults[index] ? actionsFor(visibleResults[index]).length : 0;
+      // ContextMenu là absolute nên không nằm trong scrollHeight. Chừa đủ chỗ
+      // cho header, action rows và footer để menu không bị cắt bởi cửa sổ native.
+      const menuHeight = Math.min(640, 64 + 34 + actionCount * 34 + 30 + 12);
+      apply(900, Math.max(contentHeight, menuHeight));
+      return;
+    }
+    apply(900, contentHeight);
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen, index]);
 
   const hide = () => {
     setQuery("");
@@ -368,7 +377,7 @@ export default function App() {
           setOcrItem({
             id: "ocr:result",
             title: text ? "Kết quả OCR" : "Không nhận dạng được",
-            subtitle: text ? `${text.length} ký tự · Enter để dán` : "Thử chụp lại vùng rõ hơn",
+            subtitle: text ? `${text.length} ký tự · Enter để copy` : "Thử chụp lại vùng rõ hơn",
             kind: "knowledge",
             action: "ocr",
             text,
@@ -658,7 +667,7 @@ export default function App() {
       className={`relative flex flex-col rounded-2xl overflow-hidden
                  bg-white/95 dark:bg-zinc-900/95
                  border border-black/10 dark:border-white/10
-                 ${mode !== "search" ? "h-screen" : ""}`}
+                 ${mode !== "search" || ctxOpen ? "h-screen" : ""}`}
     >
       <SearchBar
         ref={inputRef}
