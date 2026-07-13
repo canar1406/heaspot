@@ -2,8 +2,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::{collections::HashMap, str::FromStr};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// Payload gửi lên UI khi đang GHI hotkey (hook nuốt phím rồi báo phím nào được nhấn).
+#[derive(Clone, serde::Serialize)]
+struct CapturePayload {
+    key: String,
+    is_mod: bool,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    win: bool,
+}
 
 /// Alt+Space bị app khác chiếm (VD: PowerToys Run) -> chuyển sang bắt bằng LL hook
 static ALT_SPACE_VIA_HOOK: AtomicBool = AtomicBool::new(false);
@@ -13,6 +24,14 @@ static WIN_LAUNCHER_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Trạng thái theo dõi nhấn/nhả phím Win để phân biệt "gõ Win đơn" với "Win+X".
 static WIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 static WIN_OTHER_KEY: AtomicBool = AtomicBool::new(false);
+/// UI đang GHI hotkey: hook nuốt MỌI phím (kể cả Win+E, Alt+Space của Windows)
+/// và gửi phím đó về UI -> "focus tuyệt đối", không hotkey/OS shortcut nào chạy.
+static CAPTURE_MODE: AtomicBool = AtomicBool::new(false);
+/// Trạng thái modifier TỰ theo dõi khi ghi (GetAsyncKeyState không phản ánh phím đã nuốt).
+static CAP_WIN: AtomicBool = AtomicBool::new(false);
+static CAP_CTRL: AtomicBool = AtomicBool::new(false);
+static CAP_ALT: AtomicBool = AtomicBool::new(false);
+static CAP_SHIFT: AtomicBool = AtomicBool::new(false);
 
 fn config() -> &'static RwLock<(String, String)> {
     static CONFIG: OnceLock<RwLock<(String, String)>> = OnceLock::new();
@@ -93,17 +112,25 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
 /// thay vì được ô ghi lại.
 #[tauri::command]
 pub fn suspend_hotkeys(app: AppHandle) -> Result<(), String> {
+    // Bật CAPTURE_MODE: hook sẽ nuốt mọi phím khi cửa sổ app đang focus.
+    CAPTURE_MODE.store(true, Ordering::Relaxed);
+    CAP_WIN.store(false, Ordering::Relaxed);
+    CAP_CTRL.store(false, Ordering::Relaxed);
+    CAP_ALT.store(false, Ordering::Relaxed);
+    CAP_SHIFT.store(false, Ordering::Relaxed);
     app.global_shortcut()
         .unregister_all()
         .map_err(|e| e.to_string())?;
     WIN_V_ENABLED.store(false, Ordering::Relaxed);
     ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
+    WIN_LAUNCHER_ENABLED.store(false, Ordering::Relaxed);
     Ok(())
 }
 
 /// Khôi phục hotkey từ cấu hình đã lưu (gọi khi UI ghi xong / rời ô).
 #[tauri::command]
 pub fn resume_hotkeys(app: AppHandle) -> Result<(), String> {
+    CAPTURE_MODE.store(false, Ordering::Relaxed);
     register_shortcuts(&app).map_err(|e| e.to_string())
 }
 
@@ -259,6 +286,66 @@ pub fn install_winv_hook(app: AppHandle) {
     });
 }
 
+/// Foreground window có thuộc process của app không (failsafe: chỉ nuốt phím khi
+/// cửa sổ app đang focus, tránh khoá cứng bàn phím toàn hệ thống).
+unsafe fn foreground_is_ours() -> bool {
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+    let hwnd = GetForegroundWindow();
+    if hwnd.is_null() {
+        return false;
+    }
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    pid == GetCurrentProcessId()
+}
+
+/// vkCode -> (tên phím, có phải modifier không) để GHI hotkey.
+fn vk_to_key(vk: u32) -> (String, bool) {
+    match vk {
+        0x5B | 0x5C => return ("Win".into(), true),
+        0x11 | 0xA2 | 0xA3 => return ("Ctrl".into(), true),
+        0x12 | 0xA4 | 0xA5 => return ("Alt".into(), true),
+        0x10 | 0xA0 | 0xA1 => return ("Shift".into(), true),
+        _ => {}
+    }
+    let name = match vk {
+        0x41..=0x5A | 0x30..=0x39 => ((vk as u8) as char).to_string(), // A-Z, 0-9
+        0x60..=0x69 => (vk - 0x60).to_string(),                        // Numpad 0-9
+        0x70..=0x87 => format!("F{}", vk - 0x6F),                      // F1-F24
+        0x20 => "Space".into(),
+        0x0D => "Enter".into(),
+        0x09 => "Tab".into(),
+        0x1B => "Escape".into(),
+        0x08 => "Backspace".into(),
+        0x2E => "Delete".into(),
+        0x25 => "Left".into(),
+        0x26 => "Up".into(),
+        0x27 => "Right".into(),
+        0x28 => "Down".into(),
+        0x24 => "Home".into(),
+        0x23 => "End".into(),
+        0x21 => "PageUp".into(),
+        0x22 => "PageDown".into(),
+        0x2D => "Insert".into(),
+        0xBA => ";".into(),
+        0xBB => "=".into(),
+        0xBC => ",".into(),
+        0xBD => "-".into(),
+        0xBE => ".".into(),
+        0xBF => "/".into(),
+        0xC0 => "`".into(),
+        0xDB => "[".into(),
+        0xDC => "\\".into(),
+        0xDD => "]".into(),
+        0xDE => "'".into(),
+        _ => return (String::new(), false),
+    };
+    (name, false)
+}
+
 unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> isize {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         keybd_event, GetAsyncKeyState, KEYEVENTF_KEYUP, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
@@ -278,6 +365,39 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
         let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
         let held = |vk: u16| (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
+
+        // === CHẾ ĐỘ GHI HOTKEY: nuốt MỌI phím (kể cả Win+E, Alt+Space của Windows)
+        // và báo phím vừa nhấn lên UI. Chỉ chạy khi cửa sổ app đang focus (failsafe). ===
+        if CAPTURE_MODE.load(Ordering::Relaxed) && foreground_is_ours() {
+            let vk = kb.vkCode;
+            // TỰ theo dõi modifier: phím đã nuốt không cập nhật GetAsyncKeyState.
+            match vk {
+                0x5B | 0x5C => CAP_WIN.store(is_down, Ordering::Relaxed),
+                0x11 | 0xA2 | 0xA3 => CAP_CTRL.store(is_down, Ordering::Relaxed),
+                0x12 | 0xA4 | 0xA5 => CAP_ALT.store(is_down, Ordering::Relaxed),
+                0x10 | 0xA0 | 0xA1 => CAP_SHIFT.store(is_down, Ordering::Relaxed),
+                _ => {}
+            }
+            if is_down {
+                let (key, is_mod) = vk_to_key(vk);
+                if !key.is_empty() {
+                    if let Some(app) = APP.get() {
+                        let _ = app.emit(
+                            "hotkey://capture",
+                            CapturePayload {
+                                key,
+                                is_mod,
+                                ctrl: CAP_CTRL.load(Ordering::Relaxed),
+                                alt: CAP_ALT.load(Ordering::Relaxed),
+                                shift: CAP_SHIFT.load(Ordering::Relaxed),
+                                win: CAP_WIN.load(Ordering::Relaxed),
+                            },
+                        );
+                    }
+                }
+            }
+            return 1; // nuốt cả down/up -> focus tuyệt đối khi ghi
+        }
 
         // === Phím WIN ĐƠN -> Launcher (thay Start menu, kiểu PowerToys) ===
         // Cho Win-down/up đi qua để Win+X vẫn chạy; chỉ khi "gõ Win rồi nhả mà

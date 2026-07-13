@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { KW_FEATURES, resolveKeywords, DEFAULT_KEYWORDS, type KwMap } from "../keywords";
@@ -71,9 +72,28 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     return dup;
   }, [kw]);
 
+  // Cảnh báo HOTKEY trùng nhau (launcher + clipboard + hotkey từng tính năng)
+  const hotkeyDuplicates = useMemo(() => {
+    const all = [value.search_hotkey, value.clipboard_hotkey, ...Object.values(featureHotkeys)]
+      .map((h) => (h || "").trim())
+      .filter(Boolean);
+    const seen = new Set<string>();
+    const dup = new Set<string>();
+    for (const h of all) {
+      const k = h.toLowerCase();
+      if (seen.has(k)) dup.add(h);
+      else seen.add(k);
+    }
+    return dup;
+  }, [value.search_hotkey, value.clipboard_hotkey, featureHotkeys]);
+
   const save = async () => {
     if (duplicates.size > 0) {
       setStatus("⚠ Có keyword bị trùng — hãy sửa trước khi lưu");
+      return;
+    }
+    if (hotkeyDuplicates.size > 0) {
+      setStatus(`⚠ Hotkey bị trùng: ${[...hotkeyDuplicates].join(", ")} — mỗi hotkey chỉ gán cho một tính năng`);
       return;
     }
     setSaving(true);
@@ -124,6 +144,12 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
+        {hotkeyDuplicates.size > 0 && (
+          <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-[12px] text-amber-700 dark:text-amber-400">
+            <span className="text-[15px] leading-none">⚠️</span>
+            <span>Hotkey bị trùng: <b>{[...hotkeyDuplicates].join(", ")}</b> — mỗi hotkey chỉ nên gán cho một tính năng.</span>
+          </div>
+        )}
         <div ref={mainRef} className="flex-1 overflow-y-auto p-6 space-y-5">
           {tab === "general" && (
             <>
@@ -361,47 +387,78 @@ function codeToKey(code: string, fallback: string): string {
   return fallback.length === 1 ? fallback.toUpperCase() : fallback;
 }
 
+interface CapturePayload {
+  key: string; is_mod: boolean; ctrl: boolean; alt: boolean; shift: boolean; win: boolean;
+}
+
 function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [recording, setRecording] = useState(false);
   // "combo" = phải nhấn tổ hợp (có modifier); "single" = gắn 1 phím bất kỳ (kể cả phím Win đơn).
   const [mode, setMode] = useState<"combo" | "single">(
     value && !value.includes("+") ? "single" : "combo"
   );
+  const inputRef = useRef<HTMLInputElement>(null);
+  const unlistenRef = useRef<null | (() => void)>(null);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
-  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  // Áp dụng phím do HOOK gửi lên (đã nuốt phím -> bắt được cả Win+E, Alt+Space của Windows).
+  const applyCapture = (p: CapturePayload) => {
+    if (p.key === "Escape") { inputRef.current?.blur(); return; }        // huỷ ghi
+    if (p.key === "Backspace" || p.key === "Delete") { onChange(""); return; }
+    if (modeRef.current === "single") {
+      // Gắn 1 phím bất kỳ rồi TỰ THOÁT ghi (blur sau nhịp ngắn để nhả phím trước).
+      onChange(p.key);
+      setTimeout(() => inputRef.current?.blur(), 40);
+      return;
+    }
+    if (p.is_mod) return;                                                // combo: chờ phím chính
+    const mods = [p.ctrl && "Ctrl", p.alt && "Alt", p.shift && "Shift", p.win && "Win"].filter(Boolean) as string[];
+    if (mods.length === 0 && !/^F\d{1,2}$/.test(p.key)) return;
+    onChange([...mods, p.key].join("+"));
+    // Ghi xong tổ hợp -> TỰ THOÁT ghi (giống chế độ đơn phím, cho nhất quán).
+    setTimeout(() => inputRef.current?.blur(), 40);
+  };
+
+  const start = async () => {
+    setRecording(true);
+    await invoke("suspend_hotkeys").catch(() => {});
+    try {
+      unlistenRef.current = await listen<CapturePayload>("hotkey://capture", (e) => applyCapture(e.payload));
+    } catch { /* bỏ qua */ }
+  };
+  const stop = () => {
+    setRecording(false);
+    unlistenRef.current?.();
+    unlistenRef.current = null;
+    void invoke("resume_hotkeys").catch(() => {});
+  };
+  // Failsafe: nếu component unmount lúc đang ghi -> khôi phục hotkey (không kẹt bàn phím).
+  useEffect(() => () => {
+    unlistenRef.current?.();
+    void invoke("resume_hotkeys").catch(() => {});
+  }, []);
+
+  // Fallback khi hook không nuốt được (hiếm): bắt qua DOM. Bình thường hook đã nuốt nên
+  // sự kiện DOM không tới — chỉ preventDefault để tránh gõ nhầm vào ô.
+  const domFallback = (e: React.KeyboardEvent<HTMLInputElement>) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.key === "Backspace" || e.key === "Delete") { onChange(""); return; }
-
-    if (mode === "single") {
-      // Gắn 1 phím bất kỳ — kể cả phím modifier đứng một mình (Win để thay Start menu).
-      let key: string;
-      if (e.key === "Control") key = "Ctrl";
-      else if (e.key === "Alt") key = "Alt";
-      else if (e.key === "Shift") key = "Shift";
-      else if (e.key === "Meta" || e.key === "OS") key = "Win";
-      else key = codeToKey(e.code, e.key);
-      if (key) onChange(key);
+    if (["Control", "Alt", "Shift", "Meta", "OS"].includes(e.key)) {
+      if (mode === "single") onChange(e.key === "Meta" || e.key === "OS" ? "Win" : e.key === "Control" ? "Ctrl" : e.key);
       return;
     }
-
-    // Chế độ tổ hợp: bỏ qua khi chỉ nhấn phím modifier
-    if (["Control", "Alt", "Shift", "Meta", "OS"].includes(e.key)) return;
-    const mods = [
-      e.ctrlKey ? "Ctrl" : "",
-      e.altKey ? "Alt" : "",
-      e.shiftKey ? "Shift" : "",
-      e.metaKey ? "Win" : "",
-    ].filter(Boolean);
     const key = codeToKey(e.code, e.key);
     if (!key) return;
-    // Cho phép: có ít nhất 1 modifier, HOẶC phím chức năng đứng một mình (F1–F24)
+    if (mode === "single") { onChange(key); return; }
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Win"].filter(Boolean) as string[];
     if (mods.length === 0 && !/^F\d{1,2}$/.test(key)) return;
     onChange([...mods, key].join("+"));
   };
 
   const placeholder = recording
-    ? mode === "single" ? "Đang ghi… nhấn 1 phím" : "Đang ghi… nhấn tổ hợp phím"
+    ? mode === "single" ? "Đang ghi… nhấn 1 phím (Esc huỷ)" : "Đang ghi… nhấn tổ hợp phím (Esc huỷ)"
     : mode === "single" ? "Click rồi nhấn 1 phím (vd phím Windows)" : "Click rồi nhấn tổ hợp";
 
   return (
@@ -421,19 +478,19 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
         ))}
       </div>
       <input
+        ref={inputRef}
         readOnly
         value={value}
         placeholder={placeholder}
-        title="Backspace/Delete để xóa hotkey"
-        // Khi ghi: tạm ngưng mọi hotkey để tổ hợp (Alt+Space, Win+V…) không bị nuốt mất.
-        onFocus={() => { setRecording(true); void invoke("suspend_hotkeys").catch(() => {}); }}
-        onBlur={() => { setRecording(false); void invoke("resume_hotkeys").catch(() => {}); }}
+        title="Esc huỷ · Backspace/Delete để xóa hotkey"
+        onFocus={start}
+        onBlur={stop}
         className={`w-full min-w-0 rounded-md border px-2 py-1 text-[11px] font-mono outline-none transition-colors ${
           recording
             ? "border-blue-500 ring-2 ring-blue-500/50 bg-blue-500/10 animate-pulse"
             : "border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 focus:border-blue-500/60"
         }`}
-        onKeyDown={handleKey}
+        onKeyDown={domFallback}
       />
     </div>
   );
