@@ -1,6 +1,6 @@
 [package]
 name = "heaspot"
-version = "0.1.8"
+version = "0.1.9"
 description = "HeaSpot - Spotlight/Alfred cho Windows"
 edition = "2021"
 
