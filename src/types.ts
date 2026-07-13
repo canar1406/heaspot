@@ -186,6 +186,11 @@ export interface FullTextHit {
   preview: string;
 }
 
+export interface FullTextResponse {
+  results: FullTextHit[];
+  engine: "windows-search" | "everything-content" | "hybrid";
+}
+
 export interface Snippet {
   id: number;
   keyword: string;

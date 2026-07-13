@@ -2,6 +2,14 @@
 
 **HeaSpot** — launcher kiểu **Spotlight (macOS) / Alfred** cho Windows, xây bằng **Tauri (Rust + React)**. Siêu nhẹ (~10 MB RAM khi ẩn), keyboard-first, mở tức thì.
 
+### Mới trong v0.1.8
+
+- `in` dùng chiến lược hybrid: Windows Search nhanh trước, tự fallback Everything `content:` khi file nằm ngoài index; mỗi kết quả hiện đúng engine thực tế.
+- Sửa instance Everything bundled có thể chạy với database rỗng: portable Folder Index theo user home, monitor thay đổi, không cần service hay UAC.
+- Khóa trạng thái Everything SDK để search tên file và content search không ghi đè nhau; lọc cây cache/build để fallback nhanh hơn.
+- Thêm trạng thái loading cho full-text, cache kết quả và bộ smoke test có fixture thật.
+- README được mở rộng toàn bộ kiến trúc/kỹ thuật và ảnh tài liệu được chụp lại bằng profile cô lập, nền sạch.
+
 ## Phím tắt toàn cục
 
 | Phím | Chức năng |
@@ -18,7 +26,7 @@
 | Gõ | Kết quả |
 |---|---|
 | `chrome` | Tìm & mở app / file / folder (icon thật) |
-| `in <từ khoá>` / `doc:<từ khoá>` | Tìm **nội dung trong file** (Word/PDF/Excel…) qua Windows Search **+ note Capacities** |
+| `in <từ khoá>` / `doc:<từ khoá>` | Tìm **nội dung trong file** bằng Windows Search, tự fallback Everything `content:` **+ note Capacities** |
 | `tr <từ>` | **Dịch + từ điển học thuật** (IPA, ví dụ, đồng/trái nghĩa, lưu vào danh sách ôn tập) |
 | `wiki <khái niệm>` | Tra Wikipedia (preview) |
 | `chem <ký hiệu/tên/Z>` | **Từ điển hóa học**: số proton, nguyên tử khối, phân loại. VD `chem Fe`, `chem oxy`, `chem 26` |
@@ -54,7 +62,7 @@
 
 ### Full-text trong tài liệu (`in`)
 
-`in <từ khoá>` chỉ tìm **nội dung** trong các định dạng tài liệu/code được hỗ trợ ở thư mục người dùng; file thực thi và kho thành phần Windows (`.exe`, `.dll`, WinSxS, WindowsApps…) bị loại khỏi kết quả. Có thể kết nối Capacities để tìm đồng thời trong note.
+`in <từ khoá>` chỉ tìm **nội dung** trong các định dạng tài liệu/code được hỗ trợ ở thư mục người dùng. HeaSpot ưu tiên **Windows Search** vì index đảo cho kết quả nhanh, có xếp hạng và đoạn trích; nếu không tìm thấy, app tự fallback sang **Everything 1.4 `content:`** để quét cả file nằm ngoài vùng Windows đã index. Kết quả ghi rõ engine thực tế là `Windows Search` hay `Everything`. File thực thi và kho thành phần Windows (`.exe`, `.dll`, WinSxS, WindowsApps…) bị loại khỏi kết quả. Có thể kết nối Capacities để tìm đồng thời trong note.
 
 ![Tìm nội dung tài liệu và kết nối Capacities](docs/screenshots/fulltext.png)
 
@@ -147,7 +155,7 @@ Cửa sổ Windows riêng (có viền, taskbar). Cho phép chỉnh: hotkey mở 
 
 ### Dọn cache toàn app (Clear cache)
 
-Trong tab **Chung** có nút **🧹 Dọn toàn bộ cache ngay**: xoá **mọi cache tra cứu của tất cả tính năng** trong RAM (dịch, tra nhanh, Wikipedia, kết quả Google, full-text Windows Search, Capacities, icon app/file) và các ảnh clip tạm mồ côi trên đĩa, rồi báo dung lượng đã giải phóng. Dành cho người dùng lâu ngày muốn dọn dẹp — **không** đụng tới clipboard history, snippet hay cấu hình đã lưu.
+Trong tab **Chung** có nút **🧹 Dọn toàn bộ cache ngay**: xoá **mọi cache tra cứu của tất cả tính năng** trong RAM (dịch, tra nhanh, Wikipedia, kết quả Google, full-text hybrid, Capacities, icon app/file) và các ảnh clip tạm mồ côi trên đĩa, rồi báo dung lượng đã giải phóng. Dành cho người dùng lâu ngày muốn dọn dẹp — **không** đụng tới clipboard history, snippet hay cấu hình đã lưu.
 
 ![Nút Dọn cache trong Settings](docs/screenshots/clear-cache.png)
 
@@ -184,10 +192,80 @@ Bản phát hành đã **nhúng sẵn Tesseract 5 và hai model `vie+eng`** tron
 
 ## Kiến trúc
 
-- **Frontend** (`src/`): React + TypeScript + Tailwind + Framer Motion.
-- **Backend** (`src-tauri/`): Rust — hotkey, index app (Start Menu + Registry + UWP/Store qua `Get-StartApps`), clipboard watcher, SQLite (`%APPDATA%\heaspot\heaspot.db`), icon thật (Shell/AppxManifest), tray.
-- **File search**: **Everything bundle sẵn** trong app, tự chạy nền **ẩn (không tray)**; fallback index nội bộ nếu cần. Kho package hệ thống như WinSxS/WindowsApps/AppRepository được lọc khỏi launcher. Không cần cài Everything riêng.
-- **Full-text**: Windows Search (`Search.CollatorDSO`) + Capacities API; chỉ nhận nhóm tài liệu/code, loại file thực thi và độc lập với Everything.
+### Tổng quan luồng dữ liệu
+
+```mermaid
+flowchart LR
+    A["Global hotkey / Win+V / Tray"] --> B["Tauri window controller"]
+    B --> C["React UI: Search / Clipboard / Settings"]
+    C --> D["useSearch + keyword router"]
+    D --> E["Plugin TypeScript cục bộ"]
+    D --> F["Tauri IPC commands"]
+    F --> G["Everything / Windows Search / Windows API"]
+    F --> H["SQLite + cache + clipboard"]
+    F --> I["HTTP API tùy chọn"]
+    E --> J["Result list + detail preview"]
+    G --> J
+    H --> J
+    I --> J
+    J --> K["Open / paste / copy / system action"]
+```
+
+App là kiến trúc **desktop hai lớp**: WebView chỉ phụ trách giao diện và plugin tính toán an toàn; Rust giữ toàn bộ thao tác hệ thống, dữ liệu cục bộ và tài nguyên nhúng. Hai lớp trao đổi bằng Tauri IPC có kiểu dữ liệu Serde/TypeScript, không mở HTTP server cục bộ.
+
+### Frontend (`src/`)
+
+- **React 18 + TypeScript + Vite**: `App.tsx` điều phối ba mode Search/Clipboard/Settings; `main.tsx` dùng cùng bundle nhưng render `SettingsView` cho cửa sổ `settings` riêng.
+- **Tailwind CSS + CSS toàn cục**: theme sáng/tối/system, layout hai cột, trạng thái selected/focus và các icon action.
+- **Framer Motion**: animation mở launcher bằng opacity/scale/translate; không remount cây UI. Native window chỉ resize khi kích thước thật sự đổi để tránh khựng khi gõ/chuyển mode.
+- **Router theo keyword trong `useSearch.ts`**: chỉ kích hoạt tính năng khi token đầu khớp đúng keyword (`in`, `tr`, `conv`, `ps`…), debounce request async và dùng sequence guard để kết quả cũ không ghi đè truy vấn mới.
+- **Plugin chạy cục bộ trong `src/plugins/`**: calculator, converter/cơ số, timezone, công thức, hoá học, JSON/JWT, LaTeX, generator, URL/web/system command parser. Các phép tính này không gọi mạng.
+- **Điều hướng bàn phím**: `useKeyboardNav` giữ selection hợp lệ khi list async thay đổi; Context Menu, nhóm process và Clipboard đều dùng chung quy ước ↑/↓/←/→/Enter/Esc.
+- **Preview theo loại dữ liệu**: `KnowledgePreview` hiển thị dịch/từ điển/wiki/formula/OCR; `ZoomableImage` xử lý zoom theo con trỏ và pan ảnh; Clipboard preview hỗ trợ sửa tự lưu.
+
+### Backend Tauri/Rust (`src-tauri/`)
+
+- **Tauri 2** tạo launcher trong suốt, cửa sổ Settings riêng và system tray. `lib.rs` đăng ký state dùng chung (`RwLock` cho index app/file, `Mutex` cho SQLite) và toàn bộ IPC command.
+- **`core/window.rs`**: show/hide/focus, resize native, giữ foreground window để auto-paste, trim working set khi ẩn và context menu gỡ cài đặt/run admin/open location.
+- **`core/hotkey.rs`**: global shortcut mặc định và hotkey riêng từng feature; khi gọi trên đoạn đang bôi đen, app tạm copy selection, chặn clipboard watcher, khôi phục clipboard cũ rồi prefill keyword.
+- **`core/indexer.rs` + `core/icons.rs`**: quét Start Menu, Registry App Paths và UWP/Store qua `Get-StartApps`; mở UWP bằng `shell:AppsFolder`; trích icon Shell hoặc asset trong AppxManifest và cache dưới dạng PNG data URL.
+- **`commands/`**: search/full-text, clipboard, settings, snippets, OCR, translate/wiki/Google quick answer, Capacities, study words và Windows system actions.
+- **`plugins/` phía Rust**: process/task manager, services, registry, VS Code recent projects, window walker, browser passwords, Alfred Workflow và generator/hash.
+- **Windows API qua `windows-sys`**: foreground/focus, phím giả lập, GDI/capture, Shell, COM, clipboard/CF_HDROP, process/token privilege, DPAPI, power/shutdown và memory trimming. PowerShell ẩn chỉ được dùng cho các bề mặt Windows phù hợp như UWP discovery, Windows Search OLE DB và một số system query.
+
+### Các engine tìm kiếm
+
+| Phạm vi | Engine chính | Fallback / kỹ thuật |
+|---|---|---|
+| App | Index nền Start Menu + Registry + UWP | Fuzzy score: exact → prefix → word boundary → substring → subsequence |
+| Tên file/thư mục | Everything SDK qua `Everything64.dll` | Index nội bộ các thư mục người dùng nếu IPC Everything chưa sẵn sàng |
+| Nội dung file (`in`) | Windows Search `Search.CollatorDSO` | Khi rỗng, Everything `content:` qua iFilter/UTF-8 |
+| Note | Capacities API | Chạy song song với full-text khi đã cấu hình token |
+| Wiki/dịch/Google | Wikipedia, Google Translate/Dictionary, Serper | Cache RAM; Google quick answer fallback DuckDuckGo khi chưa có key |
+
+Everything 1.4.1 được nhúng và chạy nền ẩn. Để không đòi UAC hay cài Everything Service, instance portable của HeaSpot dùng **Folder Index + change monitor cho thư mục user home**; nếu máy đã có instance Everything hoạt động thì SDK dùng trực tiếp instance đó. SDK giữ trạng thái truy vấn cấp process nên backend đặt `Mutex` quanh mọi query, tránh search tên file và fallback `content:` ghi đè lẫn nhau. Với `in`, `content:` luôn đặt **sau** bộ lọc `file:`, đường dẫn home, danh sách extension và loại AppData/node_modules/.git/target/dist để giảm lượng file phải mở. Kho hệ thống WinSxS/WindowsApps/AppRepository, Recycle Bin và file `.exe/.dll` bị lọc khỏi kết quả.
+
+### Dữ liệu, cache và vòng đời
+
+- **SQLite bundled (`rusqlite`)** tại `%APPDATA%\heaspot\heaspot.db`, bật **WAL** để watcher ghi trong khi UI đọc. Bảng chính: `clipboard`, `snippets`, `settings`, `study_words`; migration cột chạy idempotent lúc mở DB.
+- **Clipboard watcher** poll cục bộ, nhận text/link/image/file list (CF_HDROP), deduplicate, phát event realtime và auto-prune theo số item/số ngày. Item ghim được bảo toàn; ảnh PNG/thumbnail nằm trong thư mục `clips` cạnh DB.
+- **Cache RAM có giới hạn** cho icon, translate/wiki/quick answer/full-text/Capacities; nút Clear cache xoá cache lookup và ảnh mồ côi nhưng không xoá dữ liệu người dùng.
+- **Everything/Tesseract là tài nguyên nhúng**. Tesseract 5 dùng model `vie+eng`; script build kiểm SHA-256 và chỉ đóng gói runtime/model cần thiết để không phình bộ cài hoặc sinh cache tải về.
+- Biến `HEASPOT_DATA_DIR` chỉ dành cho smoke test/tài liệu: chuyển DB và cache sang profile tạm, bảo đảm quá trình chụp ảnh không đọc clipboard/settings thật.
+
+### Bảo mật và riêng tư
+
+- Mặc định các tính năng nhạy cảm như browser password bị tắt. Secret giải mã bằng **Windows DPAPI + AES-GCM** trong đúng user session, không gửi mạng và mặc định không ghi history.
+- Privacy Guard bỏ qua password manager cấu hình sẵn và clipboard có format `ExcludeClipboardContentFromMonitorProcessing`.
+- API key/token chỉ lưu trong SQLite cục bộ. Tính năng nào cần mạng đều tách khỏi search mặc định và chỉ chạy khi đúng keyword.
+- Run as administrator, kill process và uninstall là hành động rõ ràng trong Context Menu; launcher không tự nâng quyền toàn bộ tiến trình.
+
+### Build, kiểm thử và phát hành
+
+- Frontend: `tsc` kiểm kiểu rồi Vite tạo bundle production. Backend: Rust unit tests kiểm parser/hotkey, UTF-8 PowerShell, bộ lọc search và query Everything fallback.
+- `scripts/capture-readme.ps1` chạy bản release với profile tạm, thao tác launcher thật bằng hotkey, chụp từng tính năng và kiểm tra kích thước/foreground window; lỗi UI trong lúc chụp khiến script dừng.
+- Release Rust bật `panic=abort`, LTO, một codegen unit, `opt-level=s` và strip symbol để giảm dung lượng.
+- GitHub Actions trên `windows-latest` cài Node 20 + Rust stable, cache Cargo, build Tauri/NSIS; push `main` cập nhật nightly, tag `v*` tạo release chính thức.
 
 ## Phát triển
 

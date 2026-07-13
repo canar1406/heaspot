@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Thư mục resources chứa Everything bundled (set từ setup, trước lần search đầu)
 static BUNDLED_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -21,27 +21,63 @@ pub fn init_everything(app: &tauri::AppHandle) {
         let Some(ev) = everything().as_ref() else {
             return; // không load được DLL -> dùng index nội bộ
         };
-        // Probe IPC: query được nghĩa là Everything (của user hoặc của app) đang chạy
-        if ev.search("winspot::ipc::probe", 1).is_some() {
-            return;
-        }
         let Some(evdir) = dir.filter(|d| d.join("Everything.exe").exists()) else {
             return;
         };
         let exe = evdir.join("Everything.exe");
-        // Ghi Everything.ini (tray_icon=0 -> KHÔNG hiện tray, chạy nền hoàn toàn)
-        // vào %APPDATA%\heaspot\everything để chắc chắn ghi được (resources có thể read-only).
+        // Ghi Everything.ini vào data dir của app. Portable Everything không có
+        // service/admin sẽ không đọc MFT, vì vậy dùng Folder Index cho user home:
+        // vẫn có SDK/monitor realtime mà không cần UAC hay cài thêm service.
         let cfg_dir = crate::db::db_path()
             .parent()
             .map(|p| p.join("everything"))
             .unwrap_or_else(|| evdir.clone());
         let _ = std::fs::create_dir_all(&cfg_dir);
         let ini = cfg_dir.join("Everything.ini");
-        if !ini.exists() {
-            let _ = std::fs::write(
-                &ini,
-                "tray_icon=0\r\nrun_in_background=1\r\nstart_in_background=1\r\nupdate_notification=0\r\n",
+        let home = dirs::home_dir()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| r"C:\Users".into());
+        let config = format!(
+            "[Everything]\r\n\
+             tray_icon=0\r\n\
+             run_in_background=1\r\n\
+             start_in_background=1\r\n\
+             update_notification=0\r\n\
+             folders={home}\r\n\
+             folder_monitor_changes=1\r\n\
+             folder_buffer_size_list=65536\r\n\
+             folder_rescan_if_full_list=1\r\n\
+             folder_update_types=1\r\n\
+             folder_update_intervals=10\r\n\
+             folder_update_interval_types=0\r\n\
+             folder_update_rescan_asap=1\r\n"
+        );
+        let needs_migration = std::fs::read_to_string(&ini)
+            .map(|old| !old.contains("[Everything]") || !old.contains("folders="))
+            .unwrap_or(true);
+        let _ = std::fs::write(&ini, config);
+
+        // v0.1.7 từng tạo INI thiếu section nên process app-owned có thể chạy với
+        // index rỗng. Chỉ khi migrate, dừng đúng executable bundled của HeaSpot;
+        // tuyệt đối không đụng instance Everything do người dùng cài riêng.
+        if needs_migration {
+            let script = r#"
+$target = [IO.Path]::GetFullPath($env:HEASPOT_EVERYTHING_EXE)
+Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath) -eq $target) } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+"#;
+            let exe_text = exe.to_string_lossy().to_string();
+            let _ = crate::commands::run_hidden_ps(
+                script,
+                &[("HEASPOT_EVERYTHING_EXE", &exe_text)],
             );
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        // Nếu user có Everything đang hoạt động, ưu tiên instance đó.
+        if ev.search("winspot::ipc::probe", 1).is_some() {
+            return;
         }
         // -config trỏ tới ini của ta; -startup: chạy nền ngay, không hiện cửa sổ.
         let _ = std::process::Command::new(exe)
@@ -234,6 +270,13 @@ struct Everything {
     lib: libloading::Library,
 }
 
+/// Everything SDK giữ trạng thái truy vấn ở cấp process. Khóa để search tên file
+/// và fallback `content:` của `in` không ghi đè truy vấn của nhau.
+fn everything_query_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 // Library chỉ được dùng qua các symbol lookup có khoá bởi OnceLock
 unsafe impl Send for Everything {}
 unsafe impl Sync for Everything {}
@@ -271,6 +314,7 @@ impl Everything {
         type GetFullPathW = unsafe extern "system" fn(u32, *mut u16, u32) -> u32;
         type IsFolderResult = unsafe extern "system" fn(u32) -> i32;
 
+        let _query_guard = everything_query_lock().lock().ok()?;
         unsafe {
             let set_search: libloading::Symbol<SetSearchW> =
                 self.lib.get(b"Everything_SetSearchW\0").ok()?;
@@ -309,7 +353,7 @@ impl Everything {
 }
 
 // ---------------------------------------------------------------------------
-// Full-text search qua Windows Search (Search.CollatorDSO OLE DB)
+// Full-text hybrid: Windows Search trước, Everything content fallback
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
@@ -319,10 +363,16 @@ pub struct FullTextHit {
     pub preview: String,
 }
 
+#[derive(Serialize, Clone)]
+pub struct FullTextResponse {
+    pub results: Vec<FullTextHit>,
+    /// `windows-search`, `everything-content` hoặc `hybrid` khi cả hai đều rỗng.
+    pub engine: String,
+}
+
 /// Cache kết quả full-text theo phiên -> tra lại cùng từ khoá là tức thì.
-fn fulltext_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Vec<FullTextHit>>> {
-    use std::sync::{Mutex, OnceLock};
-    static C: OnceLock<Mutex<std::collections::HashMap<String, Vec<FullTextHit>>>> = OnceLock::new();
+fn fulltext_cache() -> &'static Mutex<std::collections::HashMap<String, FullTextResponse>> {
+    static C: OnceLock<Mutex<std::collections::HashMap<String, FullTextResponse>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -333,17 +383,55 @@ pub fn clear_fulltext_cache() {
     }
 }
 
-/// Tìm nội dung bên trong file (Word, PDF, Excel...) qua Windows Search Index.
-/// Chạy PowerShell ẩn để query OLE DB — tránh phải bind COM trực tiếp.
+const FULLTEXT_EXTENSIONS: &str = "txt;md;pdf;doc;docx;xls;xlsx;ppt;pptx;csv;rtf;log;ini;json;xml;html;htm;yaml;yml;toml;py;js;jsx;ts;tsx;rs;c;cc;cpp;h;hpp;java;cs;sql";
+
+fn everything_literal(value: &str) -> String {
+    value.replace('"', "&quot:")
+}
+
+fn build_everything_content_query(query: &str, home: &str) -> String {
+    // `content:` ở cuối để Everything lọc trước. Bỏ cache/build dependencies vì
+    // quét iFilter từng file ở các cây này vừa chậm vừa cho kết quả ít giá trị.
+    format!(
+        "file: path:\"{}\" ext:{} !path:\"\\AppData\\\" !path:\"\\node_modules\\\" \
+         !path:\"\\.git\\\" !path:\"\\target\\\" !path:\"\\dist\\\" content:\"{}\"",
+        everything_literal(home),
+        FULLTEXT_EXTENSIONS,
+        everything_literal(query)
+    )
+}
+
+fn content_preview(path: &str, query: &str) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return String::new();
+    };
+    if meta.len() > 4 * 1024 * 1024 {
+        return String::new();
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let needle = query.to_lowercase();
+    text.lines()
+        .find(|line| line.to_lowercase().contains(&needle))
+        .map(|line| line.trim().chars().take(240).collect())
+        .unwrap_or_default()
+}
+
+/// Tìm nội dung bằng chiến lược hybrid: Windows Search đã index cho phản hồi nhanh,
+/// rồi fallback Everything `content:` để phủ file ngoài vùng index.
 #[tauri::command]
-pub async fn fulltext_search(query: String) -> Result<Vec<FullTextHit>, String> {
+pub async fn fulltext_search(query: String) -> Result<FullTextResponse, String> {
     let q: String = query
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
     let q = q.trim().to_string();
     if q.is_empty() {
-        return Ok(Vec::new());
+        return Ok(FullTextResponse {
+            results: Vec::new(),
+            engine: "hybrid".into(),
+        });
     }
     let key = q.to_lowercase();
     if let Some(hits) = fulltext_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
@@ -387,19 +475,17 @@ try {
         crate::commands::run_hidden_ps(script, &[("WINSPOT_SQL", &sql)])
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+    .unwrap_or_default();
 
     let json = stdout.trim();
-    if json.is_empty() {
-        return Ok(Vec::new());
-    }
     let value: serde_json::Value = serde_json::from_str(json).unwrap_or(serde_json::json!([]));
     let items = match value {
         serde_json::Value::Array(a) => a,
         obj @ serde_json::Value::Object(_) => vec![obj],
         _ => vec![],
     };
-    let hits = items
+    let mut hits = items
         .into_iter()
         .filter_map(|v| {
             Some(FullTextHit {
@@ -415,21 +501,67 @@ try {
         })
         .filter(|h| !h.path.is_empty() && is_fulltext_document(&h.path) && !is_search_noise(&h.path))
         .collect::<Vec<_>>();
-    // Chỉ cache khi có kết quả (tránh kẹt cache rỗng do lỗi nhất thời)
-    if !hits.is_empty() {
+
+    let engine = if hits.is_empty() {
+        let home = dirs::home_dir()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|| r"C:\Users".into());
+        let everything_query = build_everything_content_query(&q, &home);
+        let query_for_preview = q.clone();
+        let paths = tauri::async_runtime::spawn_blocking(move || {
+            everything()
+                .as_ref()
+                .and_then(|engine| engine.search(&everything_query, 15))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if let Some(paths) = paths {
+            hits = paths
+                .into_iter()
+                .filter(|(path, is_dir)| {
+                    !is_dir && is_fulltext_document(path) && !is_search_noise(path)
+                })
+                .map(|(path, _)| {
+                    let name = std::path::Path::new(&path)
+                        .file_name()
+                        .map(|value| value.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.clone());
+                    FullTextHit {
+                        name,
+                        preview: content_preview(&path, &query_for_preview),
+                        path,
+                    }
+                })
+                .collect();
+        }
+        if hits.is_empty() {
+            "hybrid"
+        } else {
+            "everything-content"
+        }
+    } else {
+        "windows-search"
+    };
+
+    let response = FullTextResponse {
+        results: hits,
+        engine: engine.into(),
+    };
+    // Chỉ cache khi có kết quả (tránh kẹt cache rỗng do lỗi nhất thời).
+    if !response.results.is_empty() {
         if let Ok(mut c) = fulltext_cache().lock() {
             if c.len() >= 300 {
                 c.clear();
             }
-            c.insert(key, hits.clone());
+            c.insert(key, response.clone());
         }
     }
-    Ok(hits)
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_fulltext_document, is_search_noise};
+    use super::{build_everything_content_query, is_fulltext_document, is_search_noise};
 
     #[test]
     fn filters_windows_component_and_store_package_paths() {
@@ -444,5 +576,12 @@ mod tests {
         assert!(is_fulltext_document(r"C:\Users\Lan\code\main.rs"));
         assert!(!is_fulltext_document(r"C:\Program Files\Internet Explorer\IEDIAGCMD.EXE"));
         assert!(!is_fulltext_document(r"C:\Windows\System32\helper.dll"));
+    }
+
+    #[test]
+    fn everything_fallback_filters_before_content_scan() {
+        let query = build_everything_content_query("học tập", r"C:\Users\Lan");
+        assert!(query.starts_with(r#"file: path:"C:\Users\Lan" ext:"#));
+        assert!(query.ends_with(r#"content:"học tập""#));
     }
 }

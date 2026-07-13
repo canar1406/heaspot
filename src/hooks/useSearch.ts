@@ -16,7 +16,7 @@ import type {
   BackendSearchResponse,
   BrowserPassword,
   CapacitiesHit,
-  FullTextHit,
+  FullTextResponse,
   KnowledgeHit,
   QuickAnswer,
   TranslationHit,
@@ -419,9 +419,14 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
     // Full-text: "<fulltext> <từ khoá>" hoặc "doc:<từ khoá>"
     const ftArg = matchWord(q, kw.fulltext) || (/^doc:\s*(.+)$/i.exec(q)?.[1]?.trim() ?? "");
     if (ftArg) {
+      setResults([{
+        id: "ft:loading", title: `Đang tìm nội dung “${ftArg}”…`,
+        subtitle: "Windows Search trước · Everything content tự fallback nếu cần",
+        kind: "fulltext", path: "",
+      }]);
       const t = setTimeout(async () => {
         const [ftRes, capRes] = await Promise.allSettled([
-          invoke<FullTextHit[]>("fulltext_search", { query: ftArg }),
+          invoke<FullTextResponse>("fulltext_search", { query: ftArg }),
           invoke<CapacitiesHit[]>("capacities_search", { query: ftArg }),
         ]);
         if (seq.current !== mySeq) return;
@@ -434,8 +439,12 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
           })));
         }
         if (ftRes.status === "fulfilled") {
-          list.push(...ftRes.value.map((h) => ({
-            id: `ft:${h.path}`, title: h.name, subtitle: h.preview || h.path,
+          const engineLabel = ftRes.value.engine === "windows-search"
+            ? "Windows Search"
+            : ftRes.value.engine === "everything-content" ? "Everything" : "Hybrid";
+          list.push(...ftRes.value.results.map((h) => ({
+            id: `ft:${h.path}`, title: h.name,
+            subtitle: `${engineLabel} · ${h.preview || h.path}`,
             kind: "fulltext" as const, path: h.path,
           })));
         }
@@ -450,7 +459,7 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         if (actualResultCount === 0) {
           list.unshift({
             id: "ft:empty", title: `Không tìm thấy nội dung "${ftArg}"`,
-            subtitle: "Windows Search Index chỉ quét các thư mục đã được index", kind: "fulltext", path: "",
+            subtitle: "Đã kiểm tra Windows Search và fallback Everything content", kind: "fulltext", path: "",
           });
         }
         setResults(list);

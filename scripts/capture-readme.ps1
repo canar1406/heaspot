@@ -16,6 +16,8 @@ public static class HeaCapture {
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 }
 "@
 
@@ -34,6 +36,10 @@ if (-not $resolvedProfile.StartsWith($resolvedTemp, [StringComparison]::OrdinalI
 }
 Remove-Item -LiteralPath $profile -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
+$fulltextFixtureDir = Join-Path $env:USERPROFILE ".heaspot-smoke"
+New-Item -ItemType Directory -Force -Path $fulltextFixtureDir | Out-Null
+$fulltextFixture = Join-Path $fulltextFixtureDir "heaspot-fulltext-demo.txt"
+[IO.File]::WriteAllText($fulltextFixture, "heaspot-demo-no-private-data - Hybrid full-text smoke-test fixture", (New-Object Text.UTF8Encoding($false)))
 
 # Nền trung tính để vùng trong suốt của launcher không lộ ứng dụng/dữ liệu cá nhân.
 $backdrop = New-Object Windows.Forms.Form
@@ -42,7 +48,12 @@ $backdrop.StartPosition = "Manual"
 $backdrop.Bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
 $backdrop.BackColor = [Drawing.Color]::FromArgb(14, 16, 20)
 $backdrop.ShowInTaskbar = $false
+$backdrop.TopMost = $true
 $backdrop.Show()
+$backdrop.BringToFront()
+$backdrop.Activate()
+[Windows.Forms.Application]::DoEvents()
+$backdrop.TopMost = $false
 [Windows.Forms.Application]::DoEvents()
 
 [Windows.Forms.Clipboard]::SetText("HeaSpot demo clipboard - safe documentation content")
@@ -59,6 +70,11 @@ function Key([byte]$key) {
   [HeaCapture]::keybd_event($key, 0, 0, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 35
   [HeaCapture]::keybd_event($key, 0, $KeyUp, [UIntPtr]::Zero)
+}
+function ReleaseModifiers {
+  foreach ($key in @(0x5B, 0x5C, 0x12, 0x11, 0x10)) {
+    [HeaCapture]::keybd_event([byte]$key, 0, $KeyUp, [UIntPtr]::Zero)
+  }
 }
 function AltSpace {
   [HeaCapture]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
@@ -93,9 +109,22 @@ function FrontTitle {
 }
 function IsHeaFront { return $script:HeaPids -contains (FrontPid) }
 function IsLauncherFront { return (IsHeaFront) -and ((FrontTitle) -eq "HeaSpot") }
+function FocusHeaSpot {
+  foreach ($pidValue in $script:HeaPids) {
+    $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+    if ($process -and $process.MainWindowHandle -ne [IntPtr]::Zero) {
+      [HeaCapture]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+      Start-Sleep -Milliseconds 350
+      if (IsHeaFront) { return $true }
+    }
+  }
+  return $false
+}
 function OpenLauncher {
   if (IsLauncherFront) { return $true }
   for ($i = 0; $i -lt 5; $i++) {
+    ReleaseModifiers
+    Key 0x1B
     AltSpace
     Start-Sleep -Milliseconds 500
     if (IsLauncherFront) { return $true }
@@ -124,9 +153,29 @@ function WindowRect {
   [HeaCapture]::GetWindowRect($handle, [ref]$rect) | Out-Null
   return $rect
 }
+function WaitForHeight([int]$minimum, [int]$timeoutSeconds) {
+  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+  do {
+    if (IsHeaFront) {
+      $rect = WindowRect
+      if (($rect.Bottom - $rect.Top) -ge $minimum) { return $true }
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
 function Shoot([string]$name) {
   Start-Sleep -Milliseconds 350
-  if (-not (IsHeaFront)) { throw "HeaSpot is not foreground while capturing $name" }
+  if (-not (IsHeaFront)) {
+    $frontPid = FrontPid
+    $frontProcess = Get-Process -Id $frontPid -ErrorAction SilentlyContinue
+    $alive = @(Get-Process heaspot -ErrorAction SilentlyContinue).Count
+    throw "HeaSpot lost foreground while capturing ${name}; front=$($frontProcess.ProcessName) pid=$frontPid title='$(FrontTitle)' heaspotAlive=$alive"
+  }
+  # Đặt nền trung tính ngay dưới app bằng Z-order, không activate/cướp focus.
+  $noMoveSizeActivate = 0x0013
+  [HeaCapture]::SetWindowPos($backdrop.Handle, [IntPtr](-1), 0, 0, 0, 0, $noMoveSizeActivate) | Out-Null
+  [HeaCapture]::SetWindowPos([HeaCapture]::GetForegroundWindow(), [IntPtr](-1), 0, 0, 0, 0, $noMoveSizeActivate) | Out-Null
   $rect = WindowRect
   $width = $rect.Right - $rect.Left
   $height = $rect.Bottom - $rect.Top
@@ -149,10 +198,10 @@ try {
   Shoot "search-launcher"
 
   TypeQuery "notepad"
-  Start-Sleep -Seconds 3
+  if (-not (WaitForHeight 150 30)) { throw "App Search did not produce results in 30 seconds" }
   Shoot "app-search"
   Key 0x27
-  Start-Sleep -Milliseconds 500
+  if (-not (WaitForHeight 300 5)) { throw "Context Menu did not expand" }
   Shoot "context-menu"
   Key 0x25
 
@@ -185,7 +234,7 @@ try {
   Shoot "task-manager"
 
   TypeQuery "in heaspot-demo-no-private-data"
-  Start-Sleep -Seconds 3
+  Start-Sleep -Seconds 12
   Shoot "fulltext"
 
   TypeQuery "g photosynthesis"
@@ -254,10 +303,13 @@ try {
   $g.Dispose(); $font.Dispose(); $ocrBitmap.Dispose()
   Key 0x1B
   Start-Sleep -Seconds 10
+  if (-not (IsHeaFront)) { [void](FocusHeaSpot) }
   Shoot "ocr"
 } finally {
   Get-Process heaspot -ErrorAction SilentlyContinue | Where-Object { $script:HeaPids -contains $_.Id } |
     Stop-Process -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $fulltextFixture -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $fulltextFixtureDir -Force -ErrorAction SilentlyContinue
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -eq "Everything.exe" -and $_.CommandLine -like "*$profile*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

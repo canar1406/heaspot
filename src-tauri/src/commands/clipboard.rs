@@ -575,7 +575,7 @@ pub fn delete_clipboard_item(
 pub fn clear_cache(state: tauri::State<'_, crate::AppState>) -> Result<String, String> {
     use std::collections::HashSet;
     crate::commands::knowledge::clear_caches(); // dịch, tra nhanh, wiki, Google
-    crate::commands::search::clear_fulltext_cache(); // full-text Windows Search
+    crate::commands::search::clear_fulltext_cache(); // full-text hybrid Windows Search/Everything
     crate::commands::capacities::clear_spaces_cache(); // spaceIds Capacities
     crate::core::indexer::clear_icon_cache(); // icon app/file
 
