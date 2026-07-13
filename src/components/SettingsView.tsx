@@ -130,19 +130,13 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
               <Section title="Hotkey mở nhanh">
                 <label className="block">
                   <span className="block text-[12px] font-medium mb-1.5">Mở launcher (tìm kiếm)</span>
-                  <select className={field} value={value.search_hotkey} onChange={(e) => setValue({ ...value, search_hotkey: e.target.value })}>
-                    {["Alt+Space", "Ctrl+Space", "Ctrl+Alt+Space", "Alt+F1"].map((x) => (
-                      <option key={x}>{x}</option>
-                    ))}
-                  </select>
+                  <HotkeyCapture value={value.search_hotkey} onChange={(hk) => setValue({ ...value, search_hotkey: hk })} />
+                  <span className="block text-[10px] text-zinc-400 mt-1">Click rồi nhấn tổ hợp — cần ít nhất 1 phím Ctrl/Alt/Shift/Win. Backspace để xoá.</span>
                 </label>
                 <label className="block">
                   <span className="block text-[12px] font-medium mb-1.5">Mở Clipboard Manager</span>
-                  <select className={field} value={value.clipboard_hotkey} onChange={(e) => setValue({ ...value, clipboard_hotkey: e.target.value })}>
-                    {["Win+V", "Ctrl+Shift+V", "Alt+V", "Ctrl+Alt+V"].map((x) => (
-                      <option key={x}>{x}</option>
-                    ))}
-                  </select>
+                  <HotkeyCapture value={value.clipboard_hotkey} onChange={(hk) => setValue({ ...value, clipboard_hotkey: hk })} />
+                  <span className="block text-[10px] text-zinc-400 mt-1"><b>Win+V</b> dùng hook đặc biệt để luôn thắng panel clipboard mặc định của Windows.</span>
                 </label>
               </Section>
 
@@ -353,7 +347,7 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
         e.stopPropagation();
         if (e.key === "Backspace" || e.key === "Delete") { onChange(""); return; }
         if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
-        const mods = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Super" : ""].filter(Boolean);
+        const mods = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Win" : ""].filter(Boolean);
         if (mods.length === 0) return;
         const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
         onChange([...mods, key].join("+"));

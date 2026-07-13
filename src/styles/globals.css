@@ -17,6 +17,28 @@ body {
   cursor: default;
 }
 
+/* Popup <select>/<option> render riêng bởi WebView2 và KHÔNG tôn trọng
+   color-scheme khi nền trang trong suốt -> bị "trắng xoá" (chữ sáng trên nền
+   trắng). Ép nền/chữ đặc theo theme để luôn đọc được. */
+select {
+  background-color: #ffffff !important;
+  color: #18181b;
+  color-scheme: light;
+}
+.dark select {
+  background-color: #27272a !important; /* zinc-800 */
+  color: #f4f4f5;
+  color-scheme: dark;
+}
+select option {
+  background-color: #ffffff !important;
+  color: #18181b !important;
+}
+.dark select option {
+  background-color: #27272a !important;
+  color: #f4f4f5 !important;
+}
+
 /* Scrollbar mảnh kiểu macOS */
 ::-webkit-scrollbar {
   width: 6px;

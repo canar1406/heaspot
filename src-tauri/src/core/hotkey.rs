@@ -28,7 +28,13 @@ fn feature_bindings() -> &'static RwLock<Vec<FeatureBinding>> {
 
 fn shortcut_for(value: &str) -> Option<Shortcut> {
     if value.eq_ignore_ascii_case("Win+V") { return None; }
-    Shortcut::from_str(value).ok()
+    // HotkeyCapture (UI) xuất "Win" cho phím Windows; parser global-shortcut cần "Super".
+    let normalized = if value.len() >= 4 && value[..4].eq_ignore_ascii_case("Win+") {
+        format!("Super+{}", &value[4..])
+    } else {
+        value.to_string()
+    };
+    Shortcut::from_str(&normalized).ok()
 }
 
 /// Plugin global-shortcut xử lý Alt+Space và Ctrl+Shift+V.
