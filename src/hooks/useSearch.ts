@@ -550,7 +550,8 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
     }
 
     const sysArg = matchWord(q, kw.system);
-    if (sysArg) {
+    if (sysArg !== null) {
+      // Gõ đúng keyword + Space (arg rỗng) -> hiện TẤT CẢ lệnh hệ thống làm gợi ý
       setResults(matchSystemCommands(sysArg));
       return;
     }

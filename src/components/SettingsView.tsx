@@ -129,12 +129,20 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
             <>
               <Section title="Hotkey mở nhanh">
                 <label className="block">
-                  <span className="block text-[12px] font-medium mb-1.5">Mở launcher (tìm kiếm)</span>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[12px] font-medium">Mở launcher (tìm kiếm)</span>
+                    <button type="button" onClick={() => setValue({ ...value, search_hotkey: "Alt+Space" })}
+                      className="text-[10px] text-blue-500 hover:underline">↺ Mặc định (Alt+Space)</button>
+                  </div>
                   <HotkeyCapture value={value.search_hotkey} onChange={(hk) => setValue({ ...value, search_hotkey: hk })} />
-                  <span className="block text-[10px] text-zinc-400 mt-1">Click rồi nhấn tổ hợp — cần ít nhất 1 phím Ctrl/Alt/Shift/Win. Backspace để xoá.</span>
+                  <span className="block text-[10px] text-zinc-400 mt-1">Click rồi nhấn tổ hợp — cần ít nhất 1 phím Ctrl/Alt/Shift/Win. <b>Alt+Space</b> là phím hệ thống, dùng nút "Mặc định" để đặt lại. Backspace để xoá.</span>
                 </label>
                 <label className="block">
-                  <span className="block text-[12px] font-medium mb-1.5">Mở Clipboard Manager</span>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[12px] font-medium">Mở Clipboard Manager</span>
+                    <button type="button" onClick={() => setValue({ ...value, clipboard_hotkey: "Win+V" })}
+                      className="text-[10px] text-blue-500 hover:underline">↺ Mặc định (Win+V)</button>
+                  </div>
                   <HotkeyCapture value={value.clipboard_hotkey} onChange={(hk) => setValue({ ...value, clipboard_hotkey: hk })} />
                   <span className="block text-[10px] text-zinc-400 mt-1"><b>Win+V</b> dùng hook đặc biệt để luôn thắng panel clipboard mặc định của Windows.</span>
                 </label>
@@ -334,24 +342,99 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** Bảng phím đặc biệt: e.code -> tên phím tauri chấp nhận. */
+const HK_CODE_MAP: Record<string, string> = {
+  Space: "Space", Enter: "Enter", Tab: "Tab", Escape: "Escape",
+  ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+  Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`",
+  Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", Insert: "Insert",
+};
+
+/** e.code (phím VẬT LÝ) -> tên phím, không bị Shift/Alt biến ký tự. */
+function codeToKey(code: string, fallback: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);          // KeyA -> A
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);        // Digit1 -> 1
+  if (/^Numpad[0-9]$/.test(code)) return code.slice(6);       // Numpad1 -> 1
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;     // F1..F24
+  if (HK_CODE_MAP[code]) return HK_CODE_MAP[code];
+  return fallback.length === 1 ? fallback.toUpperCase() : fallback;
+}
+
 function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [recording, setRecording] = useState(false);
+  // "combo" = phải nhấn tổ hợp (có modifier); "single" = gắn 1 phím bất kỳ (kể cả phím Win đơn).
+  const [mode, setMode] = useState<"combo" | "single">(
+    value && !value.includes("+") ? "single" : "combo"
+  );
+
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Backspace" || e.key === "Delete") { onChange(""); return; }
+
+    if (mode === "single") {
+      // Gắn 1 phím bất kỳ — kể cả phím modifier đứng một mình (Win để thay Start menu).
+      let key: string;
+      if (e.key === "Control") key = "Ctrl";
+      else if (e.key === "Alt") key = "Alt";
+      else if (e.key === "Shift") key = "Shift";
+      else if (e.key === "Meta" || e.key === "OS") key = "Win";
+      else key = codeToKey(e.code, e.key);
+      if (key) onChange(key);
+      return;
+    }
+
+    // Chế độ tổ hợp: bỏ qua khi chỉ nhấn phím modifier
+    if (["Control", "Alt", "Shift", "Meta", "OS"].includes(e.key)) return;
+    const mods = [
+      e.ctrlKey ? "Ctrl" : "",
+      e.altKey ? "Alt" : "",
+      e.shiftKey ? "Shift" : "",
+      e.metaKey ? "Win" : "",
+    ].filter(Boolean);
+    const key = codeToKey(e.code, e.key);
+    if (!key) return;
+    // Cho phép: có ít nhất 1 modifier, HOẶC phím chức năng đứng một mình (F1–F24)
+    if (mods.length === 0 && !/^F\d{1,2}$/.test(key)) return;
+    onChange([...mods, key].join("+"));
+  };
+
+  const placeholder = recording
+    ? mode === "single" ? "Đang ghi… nhấn 1 phím" : "Đang ghi… nhấn tổ hợp phím"
+    : mode === "single" ? "Click rồi nhấn 1 phím (vd phím Windows)" : "Click rồi nhấn tổ hợp";
+
   return (
-    <input
-      readOnly
-      value={value}
-      placeholder="Click rồi nhấn phím"
-      title="Backspace/Delete để xóa hotkey"
-      className="w-full min-w-0 rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 px-2 py-1 text-[11px] font-mono outline-none focus:border-blue-500/60"
-      onKeyDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.key === "Backspace" || e.key === "Delete") { onChange(""); return; }
-        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
-        const mods = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Win" : ""].filter(Boolean);
-        if (mods.length === 0) return;
-        const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
-        onChange([...mods, key].join("+"));
-      }}
-    />
+    <div>
+      <div className="flex gap-1 mb-1.5">
+        {(["combo", "single"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+              mode === m ? "bg-blue-600 text-white" : "bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400"
+            }`}
+          >
+            {m === "combo" ? "Tổ hợp" : "Đơn phím"}
+          </button>
+        ))}
+      </div>
+      <input
+        readOnly
+        value={value}
+        placeholder={placeholder}
+        title="Backspace/Delete để xóa hotkey"
+        // Khi ghi: tạm ngưng mọi hotkey để tổ hợp (Alt+Space, Win+V…) không bị nuốt mất.
+        onFocus={() => { setRecording(true); void invoke("suspend_hotkeys").catch(() => {}); }}
+        onBlur={() => { setRecording(false); void invoke("resume_hotkeys").catch(() => {}); }}
+        className={`w-full min-w-0 rounded-md border px-2 py-1 text-[11px] font-mono outline-none transition-colors ${
+          recording
+            ? "border-blue-500 ring-2 ring-blue-500/50 bg-blue-500/10 animate-pulse"
+            : "border-black/10 dark:border-white/15 bg-white dark:bg-zinc-800 focus:border-blue-500/60"
+        }`}
+        onKeyDown={handleKey}
+      />
+    </div>
   );
 }

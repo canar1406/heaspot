@@ -46,17 +46,18 @@ const COMMANDS: SysCmd[] = [
   },
 ];
 
-/** Lọc lệnh hệ thống theo query (match prefix của keyword) */
+/** Lọc lệnh hệ thống theo query. Query rỗng (chỉ gõ keyword + Space) -> gợi ý TẤT CẢ. */
 export function matchSystemCommands(query: string): ResultItemData[] {
   const q = query.trim().toLowerCase();
-  if (q.length < 2) return [];
-  return COMMANDS.filter((c) =>
-    c.keywords.some((k) => k.startsWith(q) || q.startsWith(k))
-  ).map((c) => ({
+  const toItem = (c: SysCmd): ResultItemData => ({
     id: `system:${c.action}`,
     title: c.title,
     subtitle: c.subtitle,
     kind: "system" as const,
     action: c.action,
-  }));
+  });
+  if (!q) return COMMANDS.map(toItem);
+  return COMMANDS.filter((c) =>
+    c.keywords.some((k) => k.startsWith(q) || q.startsWith(k))
+  ).map(toItem);
 }

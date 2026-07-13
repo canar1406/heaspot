@@ -8,6 +8,11 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 /// Alt+Space bị app khác chiếm (VD: PowerToys Run) -> chuyển sang bắt bằng LL hook
 static ALT_SPACE_VIA_HOOK: AtomicBool = AtomicBool::new(false);
 static WIN_V_ENABLED: AtomicBool = AtomicBool::new(true);
+/// Launcher bind vào PHÍM WIN ĐƠN (thay Start menu) — bắt qua low-level hook.
+static WIN_LAUNCHER_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Trạng thái theo dõi nhấn/nhả phím Win để phân biệt "gõ Win đơn" với "Win+X".
+static WIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
+static WIN_OTHER_KEY: AtomicBool = AtomicBool::new(false);
 
 fn config() -> &'static RwLock<(String, String)> {
     static CONFIG: OnceLock<RwLock<(String, String)>> = OnceLock::new();
@@ -27,7 +32,8 @@ fn feature_bindings() -> &'static RwLock<Vec<FeatureBinding>> {
 }
 
 fn shortcut_for(value: &str) -> Option<Shortcut> {
-    if value.eq_ignore_ascii_case("Win+V") { return None; }
+    // "Win+V" và "Win" (đơn) bắt bằng low-level hook, không đăng ký global shortcut.
+    if value.eq_ignore_ascii_case("Win+V") || value.eq_ignore_ascii_case("Win") { return None; }
     // HotkeyCapture (UI) xuất "Win" cho phím Windows; parser global-shortcut cần "Super".
     let normalized = if value.len() >= 4 && value[..4].eq_ignore_ascii_case("Win+") {
         format!("Super+{}", &value[4..])
@@ -82,6 +88,25 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         .map_err(|e| std::io::Error::other(e).into())
 }
 
+/// Tạm ngưng MỌI hotkey (global shortcut + low-level hook) trong lúc UI đang
+/// ghi hotkey mới — nếu không, nhấn Alt+Space/Win+V… sẽ kích hoạt hành động
+/// thay vì được ô ghi lại.
+#[tauri::command]
+pub fn suspend_hotkeys(app: AppHandle) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| e.to_string())?;
+    WIN_V_ENABLED.store(false, Ordering::Relaxed);
+    ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Khôi phục hotkey từ cấu hình đã lưu (gọi khi UI ghi xong / rời ô).
+#[tauri::command]
+pub fn resume_hotkeys(app: AppHandle) -> Result<(), String> {
+    register_shortcuts(&app).map_err(|e| e.to_string())
+}
+
 pub fn apply_hotkeys(
     app: &AppHandle,
     search: &str,
@@ -89,17 +114,29 @@ pub fn apply_hotkeys(
     feature_hotkeys_json: &str,
     keywords_json: &str,
 ) -> Result<(), String> {
-    let search_shortcut = shortcut_for(search).ok_or("Hotkey launcher không hợp lệ")?;
+    // Launcher có thể bind vào PHÍM WIN ĐƠN (thay Start menu) — bắt bằng hook, không
+    // đăng ký global shortcut. Ngược lại phải là tổ hợp/phím hợp lệ.
+    let search_is_win = search.eq_ignore_ascii_case("Win");
+    let search_shortcut = if search_is_win {
+        None
+    } else {
+        Some(shortcut_for(search).ok_or("Hotkey launcher không hợp lệ")?)
+    };
     if clipboard != "Win+V" && shortcut_for(clipboard).is_none() { return Err("Hotkey clipboard không hợp lệ".into()); }
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;
-    if let Err(e) = gs.register(search_shortcut) {
-        if search == "Alt+Space" {
-            ALT_SPACE_VIA_HOOK.store(true, Ordering::Relaxed);
-        } else { return Err(format!("Hotkey launcher đang bị ứng dụng khác chiếm: {e}")); }
+    if let Some(sc) = search_shortcut {
+        if let Err(e) = gs.register(sc) {
+            if search == "Alt+Space" {
+                ALT_SPACE_VIA_HOOK.store(true, Ordering::Relaxed);
+            } else { return Err(format!("Hotkey launcher đang bị ứng dụng khác chiếm: {e}")); }
+        } else {
+            ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
+        }
     } else {
         ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
     }
+    WIN_LAUNCHER_ENABLED.store(search_is_win, Ordering::Relaxed);
     // Chỉ đăng ký ĐÚNG phím clipboard người dùng đặt — không có phím dự phòng.
     // (Win+V dùng low-level hook riêng, không cần register global shortcut.)
     if let Some(sc) = shortcut_for(clipboard) {
@@ -228,7 +265,8 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
         VK_SHIFT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
+        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+        WM_SYSKEYUP,
     };
 
     const VK_V: u32 = 0x56;
@@ -236,8 +274,38 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
 
     if code == HC_ACTION as i32 {
         let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
-        let is_down = wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN;
+        let msg = wparam as u32;
+        let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+        let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
         let held = |vk: u16| (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
+
+        // === Phím WIN ĐƠN -> Launcher (thay Start menu, kiểu PowerToys) ===
+        // Cho Win-down/up đi qua để Win+X vẫn chạy; chỉ khi "gõ Win rồi nhả mà
+        // KHÔNG bấm phím nào khác" thì mở launcher + chèn 0xFF để chặn Start menu.
+        if WIN_LAUNCHER_ENABLED.load(Ordering::Relaxed) {
+            let is_win = kb.vkCode == VK_LWIN as u32 || kb.vkCode == VK_RWIN as u32;
+            if is_win {
+                if is_down {
+                    WIN_KEY_DOWN.store(true, Ordering::Relaxed);
+                    WIN_OTHER_KEY.store(false, Ordering::Relaxed);
+                } else if is_up {
+                    let lone = WIN_KEY_DOWN.load(Ordering::Relaxed)
+                        && !WIN_OTHER_KEY.load(Ordering::Relaxed);
+                    WIN_KEY_DOWN.store(false, Ordering::Relaxed);
+                    if lone {
+                        // Win còn "đang giữ" -> chèn 0xFF để Windows coi là Win+X -> KHÔNG mở Start
+                        keybd_event(0xFF, 0, 0, 0);
+                        keybd_event(0xFF, 0, KEYEVENTF_KEYUP, 0);
+                        if let Some(app) = APP.get() {
+                            crate::core::window::toggle(app, "search");
+                        }
+                    }
+                }
+            } else if is_down && WIN_KEY_DOWN.load(Ordering::Relaxed) {
+                // Phím khác nhấn khi Win đang giữ -> Win+X, không phải gõ Win đơn
+                WIN_OTHER_KEY.store(true, Ordering::Relaxed);
+            }
+        }
 
         // Win+V -> Clipboard Manager
         if is_down && kb.vkCode == VK_V {

@@ -107,6 +107,8 @@ pub fn run() {
             commands::snippets::get_snippets,
             commands::snippets::add_snippet,
             commands::snippets::delete_snippet,
+            crate::core::hotkey::suspend_hotkeys,
+            crate::core::hotkey::resume_hotkeys,
             crate::core::window::resize_window,
             crate::core::window::hide_and_trim,
             crate::core::window::open_settings_window,
