@@ -27,7 +27,7 @@ export function ResultList({ items, selectedIndex, onExecute, onHover }: Props) 
     >
       {items.map((item, i) => (
         <ResultItem
-          key={item.id}
+          key={`${i}:${item.id}`}
           item={item}
           selected={i === selectedIndex}
           shortcut={i < 9 ? `Ctrl+${i + 1}` : undefined}

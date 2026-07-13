@@ -613,9 +613,10 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
             .map(({ key, processes, total }) => ({
               id: `proc-group:${key}`,
               title: processes[0].name,
-              subtitle: `${processes.length} tiến trình · ${total.toFixed(1)} MB — Enter/→ để bung`,
+              subtitle: `${processes.length} tiến trình · ${total.toFixed(1)} MB — Enter bung · → menu (Kill tổng)`,
               kind: "process-group" as const,
               icon: processes[0].icon ?? undefined,
+              text: processes[0].name,
               processes,
             }));
           fresh(() => setResults(grouped));

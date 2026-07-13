@@ -233,7 +233,12 @@ export default function App() {
       return;
     }
     apply(900, contentHeight);
-  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen, index]);
+    // KHÔNG phụ thuộc `index`: rê chuột đổi index -> effect chạy -> item chọn đổi
+    // chiều cao (viền highlight) -> scrollHeight đổi -> resize -> layout nhảy dưới
+    // con trỏ -> hover lại -> vòng lặp giật "đùng đùng". Menu context vẫn đúng vì
+    // index cố định tại thời điểm ctxOpen bật.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen]);
 
   const hide = () => {
     setQuery("");
@@ -513,6 +518,18 @@ export default function App() {
           hide();
           await invoke("kill_process", { pid: item.pid, tree: action.id === "kill-tree" });
           break;
+        case "kill-group": {
+          const pids = (item.processes || []).map((p) => p.pid);
+          if (!pids.length) return;
+          hide();
+          await Promise.allSettled(
+            pids.map((pid) => invoke("kill_process", { pid, tree: true }))
+          );
+          break;
+        }
+        case "expand-group":
+          toggleProcessGroup(item.id, true);
+          break;
         case "copy-pid":
           if (item.pid != null) await invoke("copy_text", { text: String(item.pid) });
           hide();
@@ -580,9 +597,11 @@ export default function App() {
     }
 
     const currentItem = mode === "search" ? visibleResults[index] : undefined;
-    if (currentItem?.kind === "process-group" && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+    // Nhóm tiến trình: ← thu nhóm (nếu đang bung); → rơi xuống để MỞ context menu
+    // (Kill tổng…) như mọi item khác; bung/thu vẫn làm bằng Enter.
+    if (currentItem?.kind === "process-group" && e.key === "ArrowLeft") {
       e.preventDefault();
-      toggleProcessGroup(currentItem.id, e.key === "ArrowRight");
+      toggleProcessGroup(currentItem.id, false);
       return;
     }
 

@@ -252,6 +252,11 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
     }
 
     results.sort_by(|a, b| b.score.cmp(&a.score));
+    // Dedup theo path: Everything đôi khi trả cùng path 2 lần và app/file có thể
+    // trùng path. Trùng path -> id `kind:path` ở frontend trùng -> React lẫn key
+    // -> nhãn Ctrl+N gắn nhầm dòng và highlight lệch. Giữ bản điểm cao nhất.
+    let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+    results.retain(|r| seen_paths.insert(r.path.to_lowercase()));
     results.truncate(15);
     // Trích icon thật cho file/folder (chỉ tập kết quả cuối, có cache theo path)
     for r in results.iter_mut() {

@@ -49,6 +49,13 @@ export function actionsFor(item: ResultItemData): CtxAction[] {
         { id: "open", label: "Mở trong Registry Editor" },
         { id: "copy-path", label: "Copy đường dẫn key" },
       ];
+    case "process-group":
+      return [
+        { id: "kill-group", label: `Kill tất cả (${item.processes?.length ?? 0} tiến trình)` },
+        { id: "expand-group", label: "Bung / thu danh sách tiến trình" },
+        ...(item.path ? [{ id: "open-location", label: "Mở vị trí file" }] : []),
+        { id: "copy-text", label: "Copy tên tiến trình" },
+      ];
     case "process":
       return [
         { id: "kill", label: "Kill tiến trình (mạnh)" },
