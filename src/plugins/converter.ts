@@ -196,13 +196,22 @@ function fmt(v: number): string {
 const CONNECT = `to|sang|ra|thành|=|->|→|in`;
 // Capture unit tự do rồi kiểm tra qua KEY_CAT. Nhờ vậy các alias Unicode/có
 // khoảng trắng như "mét", "độ c", "nautical mile", "watt hour" hoạt động.
-const CONV_RE = new RegExp(`^(-?[\\d.,]+)\\s*(.+?)\\s+(?:${CONNECT})\\s+(.+)$`, "iu");
+const CONV_RE = new RegExp(`^(-?[\\d.,]+(?:[kmb](?=\\s))?)\\s*(.+?)\\s+(?:${CONNECT})\\s+(.+)$`, "iu");
 
 function parseNumber(raw: string): number {
-  const normalized = raw.includes(",") && !raw.includes(".")
-    ? (/^-?\\d{1,3}(,\\d{3})+$/.test(raw) ? raw.replace(/,/g, "") : raw.replace(",", "."))
-    : raw.replace(/,/g, "");
-  return Number.parseFloat(normalized);
+  let s = raw.trim();
+  // Hậu tố gõ tắt dính số: 1k=1.000, 1m=1 triệu, 1b=1 tỉ
+  let mult = 1;
+  const suf = /^(-?[\d.,]+)([kmb])$/i.exec(s);
+  if (suf) {
+    s = suf[1];
+    const u = suf[2].toLowerCase();
+    mult = u === "k" ? 1e3 : u === "m" ? 1e6 : 1e9;
+  }
+  const normalized = s.includes(",") && !s.includes(".")
+    ? (/^-?\d{1,3}(,\d{3})+$/.test(s) ? s.replace(/,/g, "") : s.replace(",", "."))
+    : s.replace(/,/g, "");
+  return Number.parseFloat(normalized) * mult;
 }
 
 export function tryConvert(q: string): ResultItemData | null {
@@ -252,6 +261,81 @@ export function tryConvert(q: string): ResultItemData | null {
     kind: "unit",
     text: outStr,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Tiền tệ + kim loại quý (vàng/bạc) — tỉ giá LIVE, đổi ở backend (currency_convert).
+// Ở đây chỉ NHẬN DIỆN truy vấn tiền tệ và trả {amount, from, to} (mã ISO / XAU / XAG).
+// ---------------------------------------------------------------------------
+const CURRENCY_ALIAS: Record<string, string> = {
+  "$": "USD", usd: "USD", dollar: "USD", "đô": "USD", "đôla": "USD", "đô la": "USD", "dola": "USD",
+  "₫": "VND", vnd: "VND", "vnđ": "VND", "đồng": "VND", dong: "VND",
+  ngn: "NGN", naira: "NGN",
+  "€": "EUR", eur: "EUR", euro: "EUR",
+  "£": "GBP", gbp: "GBP",
+  "¥": "JPY", jpy: "JPY", yen: "JPY", "yên": "JPY",
+  cny: "CNY", yuan: "CNY", rmb: "CNY", "tệ": "CNY", "nhân dân tệ": "CNY",
+  krw: "KRW", won: "KRW",
+  thb: "THB", baht: "THB",
+  rub: "RUB", ruble: "RUB", inr: "INR", rupee: "INR",
+  gold: "XAU", "vàng": "XAU", vang: "XAU", xau: "XAU",
+  silver: "XAG", "bạc": "XAG", bac: "XAG", xag: "XAG",
+  // Đơn vị vàng VN: 1 cây (lượng) = 37.5g, 1 chỉ = 3.75g
+  "cây": "CAY", cay: "CAY", "lượng": "CAY", luong: "CAY", "lạng": "CAY", cayvang: "CAY",
+  "chỉ": "CHI", chi: "CHI", chivang: "CHI",
+};
+const ISO_CURRENCIES = new Set([
+  "USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "CNY", "HKD", "NZD", "SEK", "KRW",
+  "SGD", "NOK", "MXN", "INR", "RUB", "ZAR", "TRY", "BRL", "TWD", "DKK", "PLN", "THB",
+  "IDR", "HUF", "CZK", "ILS", "CLP", "PHP", "AED", "COP", "SAR", "MYR", "RON", "VND",
+  "NGN", "EGP", "PKR", "BDT", "UAH", "KES", "GHS", "MAD", "QAR", "KWD", "BHD", "OMR",
+  "JOD", "LKR", "MMK", "KHR", "LAK", "XAU", "XAG", "CAY", "CHI",
+]);
+
+/** Gộp "cây vàng"/"chỉ vàng" -> "cây"/"chỉ" để token khớp 1 từ. */
+function collapseGold(q: string): string {
+  return q.replace(/(cây|chỉ|lượng|lạng|cay|chi|luong)\s+vàng/giu, "$1");
+}
+
+function normCurrency(tok: string): string | null {
+  const low = tok.trim().toLowerCase();
+  if (CURRENCY_ALIAS[low]) return CURRENCY_ALIAS[low];
+  const up = tok.trim().toUpperCase();
+  return ISO_CURRENCIES.has(up) ? up : null;
+}
+
+/** Token có phải đơn vị vật lý đã biết không (dùng cho thông báo lỗi). */
+function isKnownUnit(tok: string): boolean {
+  const k = normalize(tok);
+  return !!KEY_CAT[k];
+}
+
+/**
+ * Nếu truy vấn CÓ DẠNG đổi "số <a> to <b>" nhưng không đổi được, trả thông báo
+ * lỗi (chỉ rõ token nào không nhận diện). Trả null nếu không phải dạng đổi.
+ */
+export function convError(q: string): string | null {
+  const m = /^(-?[\d.,]+(?:[kmb](?=\s))?)\s*([\p{L}$€£¥₫²³/'"]+)\s+(?:to|sang|ra|thành|=|->|→|in)\s+([\p{L}$€£¥₫²³/'"]+)$/iu.exec(collapseGold(q.trim()));
+  if (!m) return null;
+  const a = m[2], b = m[3];
+  const known = (t: string) => !!normCurrency(t) || isKnownUnit(t);
+  const bad: string[] = [];
+  if (!known(a)) bad.push(a);
+  if (!known(b)) bad.push(b);
+  if (bad.length) return `Không nhận diện đơn vị / mã tiền tệ: ${bad.join(", ")}`;
+  // cả hai đều biết nhưng khác bản chất (vd tiền ↔ chiều dài)
+  return `Không đổi được "${a}" → "${b}" — khác bản chất`;
+}
+
+export function parseCurrency(q: string): { amount: number; from: string; to: string } | null {
+  const m = /^([\d.,]+(?:[kmb](?=\s))?)\s*([\p{L}$€£¥₫]+)\s+(?:to|sang|ra|thành|=|->|→)\s+([\p{L}$€£¥₫]+)$/iu.exec(collapseGold(q.trim()));
+  if (!m) return null;
+  const amount = parseNumber(m[1]);
+  if (!isFinite(amount)) return null;
+  const from = normCurrency(m[2]);
+  const to = normCurrency(m[3]);
+  if (!from || !to || from === to) return null;
+  return { amount, from, to };
 }
 
 type DataBase = "bin" | "dec" | "hex" | "ascii";

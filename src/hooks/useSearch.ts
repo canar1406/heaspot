@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { tryCalculate } from "../plugins/calculator";
-import { tryConvert } from "../plugins/converter";
+import { tryConvert, parseCurrency, convError } from "../plugins/converter";
 import { tryTime } from "../plugins/timezones";
 import { tryUrl } from "../plugins/urlDetect";
 import { generatorHelp, parseGenerator } from "../plugins/generator";
@@ -16,6 +16,7 @@ import type {
   BackendSearchResponse,
   BrowserPassword,
   CapacitiesHit,
+  CurrencyResult,
   FullTextResponse,
   KnowledgeHit,
   QuickAnswer,
@@ -198,32 +199,27 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url,
       }));
       const t = setTimeout(() => {
-        let fullDone = false;   // pha 2 (extract đầy đủ) đã về CHƯA
-        let titleCount = 0;     // số kết quả pha 1 (titles+snippet) đang hiện
-        // PHA 1: tiêu đề + snippet nhanh -> hiện tức thì (làm nền tin cậy)
+        // 2 pha chạy song song; render() luôn chọn dữ liệu TỐT NHẤT đang có.
+        // Chỉ báo "không có kết quả" khi CẢ HAI pha đã xong VÀ đều rỗng
+        // (tránh race: pha 2 rỗng về trước không được nuốt mất titles của pha 1).
+        let phase1: KnowledgeHit[] | null = null; // titles + snippet (nhanh)
+        let phase2: KnowledgeHit[] | null = null; // extract intro đầy đủ
+        const render = () => fresh(() => {
+          if (phase2 && phase2.length) setResults(mapHits(phase2));
+          else if (phase1 && phase1.length) setResults(mapHits(phase1));
+          else if (phase1 !== null && phase2 !== null)
+            setResults([{
+              id: "knowledge:empty", title: `Không có kết quả Wikipedia cho “${wikiArg}”`,
+              subtitle: "Thử từ khoá khác", kind: "knowledge", text: "", preview: "", action: "translate",
+            }]);
+          // else: còn chờ pha kia -> giữ trạng thái loading
+        });
         invoke<KnowledgeHit[]>("wiki_titles", { query: wikiArg })
-          .then((hits) => {
-            if (fullDone || !hits.length) return;
-            titleCount = hits.length;
-            fresh(() => setResults(mapHits(hits)));
-          })
-          .catch(() => {});
-        // PHA 2: extract intro đầy đủ. CHỈ thay khi có dữ liệu; rỗng thì GIỮ pha 1.
+          .then((h) => { phase1 = h; render(); })
+          .catch(() => { phase1 = []; render(); });
         invoke<KnowledgeHit[]>("wikipedia_search", { query: wikiArg })
-          .then((hits) => {
-            fullDone = true;
-            if (hits.length) {
-              fresh(() => setResults(mapHits(hits)));
-            } else if (titleCount === 0) {
-              // cả 2 pha đều rỗng -> mới báo không có kết quả
-              fresh(() => setResults([{
-                id: "knowledge:empty", title: `Không có kết quả Wikipedia cho “${wikiArg}”`,
-                subtitle: "Thử từ khoá khác", kind: "knowledge", text: "", preview: "", action: "translate",
-              }]));
-            }
-            // else: extract rỗng nhưng pha 1 có titles -> giữ nguyên titles
-          })
-          .catch(() => { fullDone = true; }); // lỗi extract -> giữ pha 1
+          .then((h) => { phase2 = h; render(); })
+          .catch(() => { phase2 = []; render(); });
       }, 130);
       return () => clearTimeout(t);
     }
@@ -318,21 +314,20 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         kind: "knowledge" as const, text: h.extract, preview: h.extract, url: h.url, action: "formula",
       }));
       const t = setTimeout(() => {
-        let done = false;
-        let tc = 0;
+        let phase1: KnowledgeHit[] | null = null;
+        let phase2: KnowledgeHit[] | null = null;
+        const render = () => fresh(() => {
+          if (phase2 && phase2.length) setResults(mapWiki(phase2));
+          else if (phase1 && phase1.length) setResults(mapWiki(phase1));
+          else if (phase1 !== null && phase2 !== null) setResults([{
+            id: "formula:none", title: `Không tìm thấy công thức "${formulaArg}"`,
+            subtitle: "Thử tên khác hoặc gõ wiki <khái niệm>", kind: "knowledge", text: "", preview: "", action: "formula",
+          }]);
+        });
         invoke<KnowledgeHit[]>("wiki_titles", { query: formulaArg })
-          .then((hits) => { if (!done && hits.length) { tc = hits.length; fresh(() => setResults(mapWiki(hits))); } })
-          .catch(() => {});
+          .then((h) => { phase1 = h; render(); }).catch(() => { phase1 = []; render(); });
         invoke<KnowledgeHit[]>("wikipedia_search", { query: formulaArg })
-          .then((hits) => {
-            done = true;
-            if (hits.length) fresh(() => setResults(mapWiki(hits)));
-            else if (tc === 0) fresh(() => setResults([{
-              id: "formula:none", title: `Không tìm thấy công thức "${formulaArg}"`,
-              subtitle: "Thử tên khác hoặc gõ wiki <khái niệm>", kind: "knowledge", text: "", preview: "", action: "formula",
-            }]));
-          })
-          .catch(() => { done = true; });
+          .then((h) => { phase2 = h; render(); }).catch(() => { phase2 = []; render(); });
       }, 130);
       return () => clearTimeout(t);
     }
@@ -478,8 +473,36 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
 
     const convArg = matchWord(q, kw.convert);
     if (convArg) {
+      // Tiền tệ / vàng / bạc: tỉ giá LIVE -> đổi ở backend (async)
+      const cur = parseCurrency(convArg);
+      if (cur) {
+        setResults([{ id: "cur:loading", title: `Đang lấy tỉ giá ${cur.from} → ${cur.to}…`, subtitle: "Tỉ giá thị trường", kind: "unit", text: "" }]);
+        const t = setTimeout(() => {
+          invoke<CurrencyResult>("currency_convert", cur)
+            .then((r) => {
+              if (seq.current !== mySeq) return;
+              const money = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: n >= 100 ? 2 : 6 });
+              const upd = r.updated ? ` · cập nhật ${r.updated}` : "";
+              setResults([{
+                id: `cur:${convArg}`,
+                title: `${money(r.amount)} ${r.from} = ${money(r.result)} ${r.to}`,
+                subtitle: `1 ${r.from} = ${money(r.rate)} ${r.to} · Nguồn: ${r.source}${upd} · Enter copy`,
+                kind: "unit", text: money(r.result),
+              }]);
+            })
+            .catch((e) => { if (seq.current === mySeq) setResults([{ id: "cur:err", title: String(e), subtitle: "Không đổi được tiền tệ", kind: "unit", text: "" }]); });
+        }, 200);
+        return () => clearTimeout(t);
+      }
       const unit = tryConvert(convArg);
-      setResults(unit ? [unit] : []);
+      if (unit) { setResults([unit]); return; }
+      // Không khớp gì -> báo lỗi rõ token nào sai (thay vì im lặng)
+      const err = convError(convArg);
+      setResults(err ? [{
+        id: "conv:err", title: err,
+        subtitle: "Kiểm tra lại đơn vị / mã tiền tệ · vd: conv 10 usd to vnd",
+        kind: "unit", text: "",
+      }] : []);
       return;
     }
 

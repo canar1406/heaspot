@@ -1,5 +1,6 @@
 pub mod capacities;
 pub mod clipboard;
+pub mod currency;
 pub mod knowledge;
 pub mod ocr;
 pub mod search;

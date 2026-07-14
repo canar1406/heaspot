@@ -155,6 +155,16 @@ export interface QuickAnswer {
   related: string[];
 }
 
+export interface CurrencyResult {
+  amount: number;
+  from: string;
+  to: string;
+  result: number;
+  rate: number;
+  source: string;
+  updated: string;
+}
+
 export interface TranslationHit {
   translation: string;
   source_language: string;

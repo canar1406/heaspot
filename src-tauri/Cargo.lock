@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "heaspot"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "aes-gcm",
  "arboard",

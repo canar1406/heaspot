@@ -577,6 +577,7 @@ pub fn clear_cache(state: tauri::State<'_, crate::AppState>) -> Result<String, S
     crate::commands::knowledge::clear_caches(); // dịch, tra nhanh, wiki, Google
     crate::commands::search::clear_fulltext_cache(); // full-text hybrid Windows Search/Everything
     crate::commands::capacities::clear_spaces_cache(); // spaceIds Capacities
+    crate::commands::currency::clear_currency_cache(); // tỉ giá tiền tệ
     crate::core::indexer::clear_icon_cache(); // icon app/file
 
     let referenced: HashSet<PathBuf> = {
