@@ -52,18 +52,17 @@ pub fn run_in_terminal(command: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Mở file / thư mục / app (.lnk, .exe...) bằng shell mặc định.
-/// App UWP/Store (`shell:AppsFolder\<AppID>`) phải mở qua explorer.exe.
+/// Mở file / thư mục / app (.lnk, .exe, UWP) bằng shell mặc định.
+/// Dùng explorer.exe cho MỌI thứ: nó resolve .lnk, chạy .exe, mở file/folder và
+/// app UWP (`shell:AppsFolder\...`) đáng tin cậy — không phụ thuộc COM apartment
+/// của thread lệnh (ShellExecuteW/opener "báo thành công" nhưng không launch .lnk).
 #[tauri::command]
 pub fn open_path(path: String) -> Result<(), String> {
-    if path.starts_with("shell:AppsFolder\\") {
-        return std::process::Command::new("explorer.exe")
-            .arg(&path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string());
-    }
-    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+    std::process::Command::new("explorer.exe")
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Mở URL bằng trình duyệt mặc định (Web Search g/yt/wiki)

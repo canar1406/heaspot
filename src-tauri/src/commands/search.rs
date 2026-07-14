@@ -200,7 +200,10 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
                     },
                     kind: "app".into(),
                     path: a.path.clone(),
-                    score: s + 200, // ưu tiên app lên đầu, cao hơn file/folder
+                    // App LUÔN xếp trên file/folder: cộng offset lớn hơn điểm khớp tối đa
+                    // của file (~1000). Nhờ vậy "vscode" -> app "Visual Studio Code" (khớp
+                    // mờ) vẫn thắng các folder ".vscode" khớp tên chính xác.
+                    score: s + 10_000,
                     icon: a.icon.clone(),
                 })
             })
