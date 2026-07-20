@@ -13,6 +13,51 @@ use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Clipboard history behaves as an MRU list, not an event log. Re-copying the
+/// same value removes its old row and inserts one row at the top. A pin follows
+/// the content, so moving a pinned item never silently unpins it.
+fn push_unique_clip(
+    conn: &rusqlite::Connection,
+    content: &str,
+    kind: &str,
+    source: &str,
+    thumb: &str,
+    content_hash: &str,
+) -> rusqlite::Result<()> {
+    let use_hash = !content_hash.is_empty();
+    let tx = conn.unchecked_transaction()?;
+    let pinned: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(is_pinned), 0) FROM clipboard
+         WHERE kind = ?1 AND ((?3 <> '' AND content_hash = ?3) OR (?3 = '' AND content = ?2))",
+        params![kind, content, content_hash],
+        |row| row.get(0),
+    )?;
+    let old_image_path: Option<String> = if use_hash && kind == "image" {
+        tx.query_row(
+            "SELECT content FROM clipboard WHERE kind = 'image' AND content_hash = ?1 LIMIT 1",
+            params![content_hash],
+            |row| row.get(0),
+        ).ok()
+    } else {
+        None
+    };
+    tx.execute(
+        "DELETE FROM clipboard
+         WHERE kind = ?1 AND ((?3 <> '' AND content_hash = ?3) OR (?3 = '' AND content = ?2))",
+        params![kind, content, content_hash],
+    )?;
+    tx.execute(
+        "INSERT INTO clipboard (content, kind, source_app, thumb, is_pinned, content_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![content, kind, source, thumb, pinned, content_hash],
+    )?;
+    tx.commit()?;
+    // Remove the superseded cached PNG only after the database move commits.
+    if let Some(path) = old_image_path {
+        if path != content { let _ = std::fs::remove_file(path); }
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct ClipItem {
     pub id: i64,
@@ -87,10 +132,7 @@ pub fn spawn_watcher(app: AppHandle) {
             if let Some(files) = unsafe { read_file_list() } {
                 let joined = files.join("\n");
                 if last_files.as_deref() != Some(&joined) {
-                    let _ = conn.execute(
-                        "INSERT INTO clipboard (content, kind, source_app) VALUES (?1, 'files', ?2)",
-                        params![joined, source],
-                    );
+                    let _ = push_unique_clip(&conn, &joined, "files", &source, "", "");
                     last_files = Some(joined);
                     inserted = true;
                 }
@@ -100,11 +142,7 @@ pub fn spawn_watcher(app: AppHandle) {
                 let hash = format!("{:x}", md5::Md5::digest(&img.bytes));
                 if last_image_hash.as_deref() != Some(&hash) {
                     if let Some((path, thumb, label)) = save_image(&img) {
-                        let _ = conn.execute(
-                            "INSERT INTO clipboard (content, kind, source_app, thumb) \
-                             VALUES (?1, 'image', ?2, ?3)",
-                            params![path, source, thumb],
-                        );
+                        let _ = push_unique_clip(&conn, &path, "image", &source, &thumb, &hash);
                         // content = đường dẫn PNG; preview label nằm trong created_at? không —
                         // label WxH đã nhúng trong thumb subtitle phía UI
                         let _ = label;
@@ -124,10 +162,7 @@ pub fn spawn_watcher(app: AppHandle) {
                     } else {
                         "text"
                     };
-                    let _ = conn.execute(
-                        "INSERT INTO clipboard (content, kind, source_app) VALUES (?1, ?2, ?3)",
-                        params![text, kind, source],
-                    );
+                    let _ = push_unique_clip(&conn, &text, kind, &source, "", "");
                     last_text = Some(text);
                     inserted = true;
                 }
@@ -630,4 +665,53 @@ pub fn clear_clipboard_history(state: tauri::State<'_, crate::AppState>) -> Resu
     conn.execute("DELETE FROM clipboard WHERE is_pinned = 0", [])
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_unique_clip;
+
+    fn db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clipboard (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                source_app TEXT NOT NULL DEFAULT '',
+                thumb TEXT NOT NULL DEFAULT '',
+                is_pinned INTEGER NOT NULL DEFAULT 0,
+                content_hash TEXT NOT NULL DEFAULT ''
+            );"
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn repeated_text_moves_instead_of_cloning() {
+        let conn = db();
+        push_unique_clip(&conn, "alpha", "text", "one", "", "").unwrap();
+        push_unique_clip(&conn, "beta", "text", "two", "", "").unwrap();
+        push_unique_clip(&conn, "alpha", "text", "three", "", "").unwrap();
+        let rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM clipboard WHERE content = 'alpha'", [], |r| r.get(0)
+        ).unwrap();
+        let newest: String = conn.query_row(
+            "SELECT content FROM clipboard ORDER BY id DESC LIMIT 1", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(newest, "alpha");
+    }
+
+    #[test]
+    fn moving_content_preserves_pin() {
+        let conn = db();
+        push_unique_clip(&conn, "keep", "text", "one", "", "").unwrap();
+        conn.execute("UPDATE clipboard SET is_pinned = 1", []).unwrap();
+        push_unique_clip(&conn, "keep", "text", "two", "", "").unwrap();
+        let pinned: i64 = conn.query_row(
+            "SELECT is_pinned FROM clipboard WHERE content = 'keep'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(pinned, 1);
+    }
 }

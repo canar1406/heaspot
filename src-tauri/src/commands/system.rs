@@ -57,12 +57,23 @@ pub fn run_in_terminal(command: String) -> Result<(), String> {
 /// app UWP (`shell:AppsFolder\...`) đáng tin cậy — không phụ thuộc COM apartment
 /// của thread lệnh (ShellExecuteW/opener "báo thành công" nhưng không launch .lnk).
 #[tauri::command]
-pub fn open_path(path: String) -> Result<(), String> {
+pub fn open_path(path: String, state: tauri::State<'_, crate::AppState>) -> Result<(), String> {
     std::process::Command::new("explorer.exe")
         .arg(&path)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if let Ok(conn) = state.db.lock() {
+        let _ = conn.execute(
+            "INSERT INTO launch_usage(path, launch_count, last_launched) VALUES (?1, 1, datetime('now', 'localtime'))
+             ON CONFLICT(path) DO UPDATE SET launch_count = launch_count + 1, last_launched = datetime('now', 'localtime')",
+            rusqlite::params![path],
+        );
+        let _ = conn.execute(
+            "DELETE FROM launch_usage WHERE path NOT IN (SELECT path FROM launch_usage ORDER BY last_launched DESC LIMIT 1000)",
+            [],
+        );
+    }
+    Ok(())
 }
 
 /// Mở URL bằng trình duyệt mặc định (Web Search g/yt/wiki)
@@ -125,7 +136,8 @@ pub fn open_file_location(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Chạy uninstall entry mà Control Panel sử dụng; fallback mở Programs and Features.
+/// Chạy đúng uninstaller của app. Không fallback sang danh sách Control Panel
+/// chung vì thao tác đó vừa chậm vừa bắt người dùng tìm lại ứng dụng.
 #[tauri::command]
 pub fn uninstall_app(title: String, path: String) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
@@ -139,8 +151,34 @@ pub fn uninstall_app(title: String, path: String) -> Result<String, String> {
             .spawn().map_err(|e| e.to_string())?;
         return Ok(format!("Đã mở trình gỡ cài đặt của {display}"));
     }
-    Command::new("control.exe").arg("appwiz.cpl").spawn().map_err(|e| e.to_string())?;
-    Ok("Không xác định được gói chính xác; đã mở Programs and Features".into())
+    if let Some(app_id) = path.strip_prefix("shell:AppsFolder\\") {
+        let family = app_id.split('!').next().unwrap_or("");
+        if !family.is_empty()
+            && family.chars().all(|c| c.is_alphanumeric() || "._-".contains(c))
+        {
+            let script = "$pkg = Get-AppxPackage | Where-Object { $_.PackageFamilyName -eq $env:HEASPOT_PACKAGE_FAMILY } | Select-Object -First 1; if (-not $pkg) { throw 'Package not found' }; Remove-AppxPackage -Package $pkg.PackageFullName";
+            crate::commands::run_hidden_ps(script, &[("HEASPOT_PACKAGE_FAMILY", family)])?;
+            return Ok(format!("Đã gỡ cài đặt {title}"));
+        }
+    }
+    // Portable executable: there is no Windows uninstall registration. Allow
+    // removing the exact file only when it lives inside the user's profile;
+    // never treat Program Files/Windows or a directory as a portable target.
+    let portable = std::path::PathBuf::from(path.trim_matches('"'));
+    let current = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    let candidate = portable.canonicalize().ok();
+    let home = dirs::home_dir().and_then(|p| p.canonicalize().ok());
+    if portable.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        && candidate.as_ref().is_some_and(|p| p.is_file())
+        && home.as_ref().zip(candidate.as_ref()).is_some_and(|(h, p)| p.starts_with(h))
+        && candidate != current
+    {
+        std::fs::remove_file(candidate.unwrap()).map_err(|e| format!("Không xóa được bản portable {title}: {e}"))?;
+        return Ok(format!("Đã xóa bản portable {title}"));
+    }
+    Err(format!(
+        "Không tìm thấy trình gỡ cài đặt chính xác cho {title}; HeaSpot không mở Control Panel chung nữa."
+    ))
 }
 
 fn find_uninstall_entry(title: &str, app_path: &str) -> Option<(String, String)> {
@@ -159,8 +197,9 @@ fn find_uninstall_entry(title: &str, app_path: &str) -> Option<(String, String)>
         for child in key.enum_keys().flatten() {
             let Ok(entry) = key.open_subkey(child) else { continue };
             let display: String = entry.get_value("DisplayName").unwrap_or_default();
+            let quiet: String = entry.get_value("QuietUninstallString").unwrap_or_default();
             let uninstall: String = entry.get_value("UninstallString").unwrap_or_default();
-            if display.is_empty() || uninstall.is_empty() { continue; }
+            if display.is_empty() || (uninstall.is_empty() && quiet.is_empty()) { continue; }
             let d = normalize_app_name(&display);
             let icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
             let install: String = entry.get_value("InstallLocation").unwrap_or_default();
@@ -170,7 +209,11 @@ fn find_uninstall_entry(title: &str, app_path: &str) -> Option<(String, String)>
             let icon_path = icon.trim_matches('"').split(',').next().unwrap_or("").to_lowercase();
             if !icon_path.is_empty() && target.contains(&icon_path) { score += 50; }
             if !install.is_empty() && target.starts_with(&install.to_lowercase()) { score += 40; }
-            if score > best.as_ref().map(|x| x.0).unwrap_or(20) { best = Some((score, display, uninstall)); }
+            // Prefer the interactive vendor uninstaller. QuietUninstallString
+            // is only a fallback; uninstalling silently from one menu click is
+            // surprising and unlike Revo's confirmable workflow.
+            let command = if uninstall.is_empty() { quiet } else { uninstall };
+            if score > best.as_ref().map(|x| x.0).unwrap_or(20) { best = Some((score, display, command)); }
         }
     }
     best.map(|(_, display, command)| (display, command))

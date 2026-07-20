@@ -30,6 +30,14 @@ pub(crate) fn run_hidden_ps(
         cmd.env(k, v);
     }
     let output = cmd.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() {
+            format!("PowerShell thất bại với mã {:?}", output.status.code())
+        } else {
+            error
+        });
+    }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 

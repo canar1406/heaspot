@@ -53,10 +53,15 @@ pub fn spawn_index_workers(app: AppHandle) {
             CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as _);
         }
         loop {
-            // Quét app trước và commit NGAY (nhanh) -> app hiện gần như tức thì,
-            // không phải chờ scan_files (quét Desktop/Documents... có thể lâu).
-            let apps = scan_apps();
+            // Publish classic apps immediately. UWP discovery invokes
+            // PowerShell/Appx and may take seconds on a cold boot; search must
+            // not have an empty app index while that work is running.
+            let (mut apps, mut seen) = scan_desktop_apps();
             let state = app.state::<crate::AppState>();
+            if let Ok(mut w) = state.apps.write() {
+                *w = apps.clone();
+            }
+            scan_startapps(&mut apps, &mut seen);
             if let Ok(mut w) = state.apps.write() {
                 *w = apps;
             }
@@ -69,8 +74,7 @@ pub fn spawn_index_workers(app: AppHandle) {
     });
 }
 
-/// Quét Start Menu (system + user) và Registry App Paths
-pub fn scan_apps() -> Vec<AppEntry> {
+fn scan_desktop_apps() -> (Vec<AppEntry>, HashSet<String>) {
     let mut apps: Vec<AppEntry> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -111,7 +115,9 @@ pub fn scan_apps() -> Vec<AppEntry> {
                 let path_str = path.to_string_lossy().to_string();
                 apps.push(AppEntry {
                     name: name.to_string(),
-                    icon: icon_for(&path_str),
+                    // Shell icon extraction is deferred until after the text
+                    // result is visible; this keeps the initial app index fast.
+                    icon: None,
                     path: path_str,
                 });
             }
@@ -120,12 +126,37 @@ pub fn scan_apps() -> Vec<AppEntry> {
 
     // Registry: HKLM\...\App Paths (các exe đã đăng ký)
     scan_app_paths_registry(&mut apps, &mut seen);
-
-    // UWP / Store app (Notepad, Calculator, Settings...) — không có .lnk trong Start Menu
-    scan_startapps(&mut apps, &mut seen);
+    // Một số app không tạo Start Menu/App Paths nhưng vẫn có mặt hợp lệ trong
+    // Apps & features. Index DisplayIcon của các uninstall entry đó.
+    scan_uninstall_registry_apps(&mut apps, &mut seen);
 
     apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    apps
+    (apps, seen)
+}
+
+fn scan_uninstall_registry_apps(apps: &mut Vec<AppEntry>, seen: &mut HashSet<String>) {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let locations = [
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+    for (root, location) in locations {
+        let Ok(key) = RegKey::predef(root).open_subkey(location) else { continue };
+        for child in key.enum_keys().flatten() {
+            let Ok(entry) = key.open_subkey(child) else { continue };
+            let name: String = entry.get_value("DisplayName").unwrap_or_default();
+            let icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
+            let uninstall: String = entry.get_value("UninstallString").unwrap_or_default();
+            if name.trim().is_empty() || icon.trim().is_empty() || uninstall.trim().is_empty() { continue; }
+            let path = icon.trim().trim_matches('"').split(',').next().unwrap_or("").trim_matches('"').to_string();
+            if !Path::new(&path).is_file() { continue; }
+            if seen.insert(name.to_lowercase()) {
+                apps.push(AppEntry { name, path, icon: None });
+            }
+        }
+    }
 }
 
 /// Quét toàn bộ app hiển thị trong Start (gồm UWP/Store) qua `Get-StartApps`.
@@ -246,36 +277,24 @@ fn png_file_to_data_url(path: &str) -> Option<String> {
 }
 
 fn scan_app_paths_registry(apps: &mut Vec<AppEntry>, seen: &mut HashSet<String>) {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
 
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(app_paths) =
-        hklm.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths")
-    else {
-        return;
-    };
-    for key in app_paths.enum_keys().flatten() {
-        let Ok(sub) = app_paths.open_subkey(&key) else {
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let hive = RegKey::predef(root);
+        let Ok(app_paths) = hive.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") else {
             continue;
         };
-        let Ok(exe_path) = sub.get_value::<String, _>("") else {
-            continue;
-        };
-        let exe_path = exe_path.trim_matches('"').to_string();
-        if !Path::new(&exe_path).exists() {
-            continue;
-        }
-        let name = key.trim_end_matches(".exe").to_string();
-        if name.is_empty() {
-            continue;
-        }
-        if seen.insert(name.to_lowercase()) {
-            apps.push(AppEntry {
-                name,
-                icon: icon_for(&exe_path),
-                path: exe_path,
-            });
+        for key in app_paths.enum_keys().flatten() {
+            let Ok(sub) = app_paths.open_subkey(&key) else { continue };
+            let Ok(exe_path) = sub.get_value::<String, _>("") else { continue };
+            let exe_path = exe_path.trim_matches('"').to_string();
+            if !Path::new(&exe_path).exists() { continue; }
+            let name = key.trim_end_matches(".exe").to_string();
+            if name.is_empty() { continue; }
+            if seen.insert(name.to_lowercase()) {
+                apps.push(AppEntry { name, icon: None, path: exe_path });
+            }
         }
     }
 }

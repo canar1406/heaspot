@@ -53,6 +53,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::search::search_all,
+            commands::search::load_result_icons,
             commands::search::fulltext_search,
             commands::capacities::capacities_search,
             commands::capacities::set_capacities_token,
@@ -114,6 +115,11 @@ pub fn run() {
             crate::core::window::hide_and_trim,
             crate::core::window::open_settings_window,
         ])
-        .run(tauri::generate_context!())
-        .expect("lỗi khi khởi chạy WinSpot");
+        .build(tauri::generate_context!())
+        .expect("lỗi khi khởi tạo HeaSpot")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                crate::commands::search::shutdown_everything();
+            }
+        });
 }

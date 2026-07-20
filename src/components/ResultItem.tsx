@@ -31,6 +31,7 @@ const ICON_BG: Partial<Record<ResultItemData["kind"], string>> = {
   process: "bg-red-500/15 text-red-600 dark:text-red-400",
   "process-group": "bg-red-500/15 text-red-600 dark:text-red-400",
   password: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  emoji: "bg-pink-500/15 text-pink-600 dark:text-pink-400",
 };
 
 interface Props {

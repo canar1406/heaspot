@@ -14,6 +14,12 @@ import { resolveKeywords, DEFAULT_KEYWORDS, type KwMap } from "./keywords";
 import { applyTheme } from "./theme";
 import type { AppSettings, ClipItem, ResultItemData, UiMode } from "./types";
 
+type UninstallPrompt = {
+  item: ResultItemData;
+  running: boolean;
+  error?: string;
+};
+
 export default function App() {
   const [mode, setMode] = useState<UiMode>("search");
   const [query, setQuery] = useState("");
@@ -34,6 +40,7 @@ export default function App() {
   const [kw, setKw] = useState<KwMap>(DEFAULT_KEYWORDS);
   const [autoPaste, setAutoPaste] = useState(true);
   const [pwToHistory, setPwToHistory] = useState(false);
+  const [uninstallPrompt, setUninstallPrompt] = useState<UninstallPrompt>();
 
   const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey, kw);
   const routedResults = results.flatMap((item): ResultItemData[] => {
@@ -151,6 +158,7 @@ export default function App() {
       const payload = typeof e.payload === "string" ? { mode: e.payload } : e.payload;
       const nextMode = payload.mode === "clipboard" ? "clipboard" : "search";
       const prefill = payload.prefill ?? "";
+      setUninstallPrompt(undefined);
       setMode(nextMode);
       setQuery(prefill);
       setOcrItem(undefined);
@@ -181,6 +189,7 @@ export default function App() {
   // Khi ẩn: reset về trạng thái gọn nhất để lần mở sau không bị "nhảy" layout
   useEffect(() => {
     const unlisten = listen("winspot://hidden", () => {
+      setUninstallPrompt(undefined);
       setMode("search");
       setQuery("");
       setOcrItem(undefined);
@@ -213,6 +222,10 @@ export default function App() {
       lastSize.current = { w, h };
       invoke("resize_window", { height: h, width: w }).catch(() => {});
     };
+    if (uninstallPrompt) {
+      apply(900, uninstallPrompt.error ? 330 : 292);
+      return;
+    }
     if (mode === "clipboard") {
       apply(900, 520);
       return;
@@ -238,11 +251,36 @@ export default function App() {
     // con trỏ -> hover lại -> vòng lặp giật "đùng đùng". Menu context vẫn đúng vì
     // index cố định tại thời điểm ctxOpen bật.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen]);
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen, uninstallPrompt]);
 
   const hide = () => {
+    setUninstallPrompt(undefined);
     setQuery("");
     invoke("hide_and_trim").catch(() => {});
+  };
+
+  const closeUninstallPrompt = () => {
+    setUninstallPrompt(undefined);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const confirmUninstall = async () => {
+    const prompt = uninstallPrompt;
+    if (!prompt || prompt.running || !prompt.item.path) return;
+    setUninstallPrompt({ ...prompt, running: true, error: undefined });
+    try {
+      await invoke("uninstall_app", {
+        title: prompt.item.title,
+        path: prompt.item.path,
+      });
+      hide();
+    } catch (err) {
+      setUninstallPrompt({
+        ...prompt,
+        running: false,
+        error: String(err),
+      });
+    }
   };
 
   async function execute(item: ResultItemData) {
@@ -314,6 +352,9 @@ export default function App() {
         case "time":
           if (item.text) await invoke("copy_text", { text: item.text });
           hide();
+          break;
+        case "emoji":
+          if (item.text) await invoke("paste_text", { text: item.text });
           break;
         case "knowledge":
           // OCR / Google quick answer: Enter = copy; còn lại = dán như cũ
@@ -482,8 +523,7 @@ export default function App() {
           break;
         case "uninstall":
           if (!item.path) return;
-          hide();
-          await invoke("uninstall_app", { title: item.title, path: item.path });
+          setUninstallPrompt({ item, running: false });
           break;
         case "open-terminal-here":
           if (!item.path) return;
@@ -635,7 +675,6 @@ export default function App() {
     } else if (e.key === "Escape") {
       e.preventDefault();
       if (snipOpen) setSnipOpen(false);
-      else if (query) setQuery("");
       else hide();
     } else if (mode === "clipboard" && e.key === "Delete" && !query) {
       e.preventDefault();
@@ -686,7 +725,7 @@ export default function App() {
       className={`relative flex flex-col rounded-2xl overflow-hidden
                  bg-white/95 dark:bg-zinc-900/95
                  border border-black/10 dark:border-white/10
-                 ${mode !== "search" || ctxOpen ? "h-screen" : ""}`}
+                 ${mode !== "search" || ctxOpen || uninstallPrompt ? "h-screen" : ""}`}
     >
       <SearchBar
         ref={inputRef}
@@ -792,6 +831,58 @@ export default function App() {
               ? "Enter dán · ⇧Enter dán thuần · ⌃1-9 dán nhanh · ⌃P ghim · ⌃S snippet · Del xoá"
               : "↑↓ chọn · Enter mở · → menu · Tab điền · Esc đóng"}
           </span>
+        </div>
+      )}
+
+      {uninstallPrompt && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-white/[0.98] px-8 dark:bg-zinc-900/[0.98]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="uninstall-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !uninstallPrompt.running) {
+              event.preventDefault();
+              closeUninstallPrompt();
+            }
+          }}
+        >
+          <div className="w-full max-w-[560px] rounded-2xl border border-black/10 bg-zinc-50 p-5 shadow-2xl dark:border-white/10 dark:bg-zinc-800">
+            <div id="uninstall-title" className="text-[16px] font-semibold text-zinc-900 dark:text-zinc-50">
+              Gỡ cài đặt “{uninstallPrompt.item.title}”?
+            </div>
+            <div className="mt-2 text-[12.5px] leading-relaxed text-zinc-600 dark:text-zinc-300">
+              HeaSpot sẽ dùng trình gỡ cài đặt chính thức của ứng dụng. Nếu đây là app portable,
+              chỉ file .exe đã chọn sẽ bị xóa.
+            </div>
+            <div className="mt-2 truncate rounded-lg bg-black/5 px-3 py-2 text-[11px] text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
+              {uninstallPrompt.item.path}
+            </div>
+            {uninstallPrompt.error && (
+              <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[12px] text-red-700 dark:text-red-300">
+                {uninstallPrompt.error}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                disabled={uninstallPrompt.running}
+                onClick={closeUninstallPrompt}
+                className="rounded-lg border border-black/10 px-4 py-2 text-[12.5px] font-medium text-zinc-700 hover:bg-black/5 disabled:opacity-50 dark:border-white/10 dark:text-zinc-200 dark:hover:bg-white/5"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={uninstallPrompt.running}
+                onClick={() => void confirmUninstall()}
+                className="rounded-lg bg-red-600 px-4 py-2 text-[12.5px] font-semibold text-white hover:bg-red-500 disabled:cursor-wait disabled:opacity-60"
+              >
+                {uninstallPrompt.running ? "Đang xử lý…" : "Gỡ cài đặt"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </motion.div>

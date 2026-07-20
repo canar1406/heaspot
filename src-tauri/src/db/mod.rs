@@ -48,6 +48,11 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
             translation TEXT NOT NULL,
             details TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS launch_usage (
+            path TEXT PRIMARY KEY,
+            launch_count INTEGER NOT NULL DEFAULT 0,
+            last_launched TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );",
     )?;
     // Migration cho bảng clipboard cũ (bỏ qua lỗi nếu cột đã tồn tại)
@@ -62,6 +67,32 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
     let _ = conn.execute(
         "ALTER TABLE clipboard ADD COLUMN thumb TEXT NOT NULL DEFAULT ''",
         [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE clipboard ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_content_hash ON clipboard(kind, content_hash)",
+        [],
+    );
+    // One-time cleanup for old text/link/file duplicates. Keep the newest row
+    // and preserve pin state on it before removing the stale copies.
+    let _ = conn.execute_batch(
+        "UPDATE clipboard SET is_pinned = 1
+           WHERE id IN (
+             SELECT MAX(id) FROM clipboard
+             WHERE kind IN ('text','link','files')
+             GROUP BY kind, content
+             HAVING MAX(is_pinned) = 1
+           );
+         DELETE FROM clipboard
+           WHERE kind IN ('text','link','files')
+             AND id NOT IN (
+               SELECT MAX(id) FROM clipboard
+               WHERE kind IN ('text','link','files')
+               GROUP BY kind, content
+             );"
     );
     Ok(conn)
 }

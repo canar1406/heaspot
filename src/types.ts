@@ -27,7 +27,8 @@ export type ResultKind =
   | "ocr-cmd"
   | "process"
   | "process-group"
-  | "password";
+  | "password"
+  | "emoji";
 
 export interface ResultItemData {
   id: string;
@@ -188,6 +189,11 @@ export interface StudyWord {
 export interface BackendSearchResponse {
   results: BackendSearchResult[];
   engine: "everything" | "internal";
+}
+
+export interface ResultIcon {
+  path: string;
+  icon?: string | null;
 }
 
 export interface FullTextHit {

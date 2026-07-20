@@ -11,6 +11,7 @@ import { findFormulas } from "../plugins/formulas";
 import { findChemistry } from "../plugins/chemistry";
 import { buildJsonResults, buildJwtResults } from "../plugins/devtools";
 import { findLatex } from "../plugins/latex";
+import { findEmojis } from "../plugins/emoji";
 import { matchWord, type KwMap, DEFAULT_KEYWORDS } from "../keywords";
 import type {
   BackendSearchResponse,
@@ -26,6 +27,7 @@ import type {
   ProcInfo,
   RegKeyInfo,
   ResultItemData,
+  ResultIcon,
   ServiceInfo,
   StudyWord,
   Snippet,
@@ -232,21 +234,7 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
       }]);
       const t = setTimeout(() => {
         let fullDone = false;
-        // PHA 1: bản dịch nhanh (1 request) -> hiện tức thì
-        invoke<QuickTranslation>("quick_translate", { query: trArg })
-          .then((qt) => {
-            if (fullDone) return; // chi tiết đã về -> không ghi đè
-            fresh(() => setResults([{
-              id: `translate:${trArg}`, title: qt.translation,
-              subtitle: `${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()} · Enter để dán · đang tải chi tiết…`,
-              kind: "knowledge", text: qt.translation,
-              preview: `Bản dịch (${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()}):\n${qt.translation}\n\nĐang tải phát âm, định nghĩa, collocations…`,
-              keyword: trArg, action: "translate",
-            }]));
-          })
-          .catch(() => {});
-        // PHA 2: chi tiết đầy đủ (từ điển, định nghĩa, collocations) -> thay khi xong
-        invoke<TranslationHit>("translate_lookup", { query: trArg })
+        const loadDetails = () => invoke<TranslationHit>("translate_lookup", { query: trArg })
           .then((hit) => {
             fullDone = true;
             const details = hit.entries.map((e, i) => {
@@ -269,8 +257,33 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
             }]));
           })
           .catch(() => {});
-      }, 130);
+        // PHA 1: bản dịch nhanh (1 request) -> hiện tức thì
+        invoke<QuickTranslation>("quick_translate", { query: trArg })
+          .then((qt) => {
+            if (fullDone) return; // chi tiết đã về -> không ghi đè
+            fresh(() => setResults([{
+              id: `translate:${trArg}`, title: qt.translation,
+              subtitle: `${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()} · Enter để dán · đang tải chi tiết…`,
+              kind: "knowledge", text: qt.translation,
+              preview: `Bản dịch (${qt.source_language.toUpperCase()} → ${qt.target_language.toUpperCase()}):\n${qt.translation}\n\nĐang tải phát âm, định nghĩa, collocations…`,
+              keyword: trArg, action: "translate",
+            }]));
+          })
+          .catch(() => {})
+          .finally(loadDetails);
+      }, 60);
       return () => clearTimeout(t);
+    }
+
+    const emojiArg = matchWord(q, kw.emoji);
+    if (emojiArg !== null) {
+      const matches = findEmojis(emojiArg);
+      setResults(matches.length ? matches : [{
+        id: "emoji:empty", title: "Không tìm thấy emoji phù hợp",
+        subtitle: "Thử tiếng Việt hoặc tiếng Anh, ví dụ: emoji cảm ơn · emoji rocket",
+        kind: "emoji", text: "",
+      }]);
+      return;
     }
 
     const reviewArg = matchWord(q, kw.review);
@@ -691,8 +704,23 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
           kind: r.kind, path: r.path, icon: r.icon ?? undefined,
         }));
         setResults(backend);
+        const iconPaths = backend
+          .filter((item) => !item.icon && ["app", "file", "folder"].includes(item.kind) && item.path)
+          .map((item) => item.path as string);
+        if (iconPaths.length) {
+          invoke<ResultIcon[]>("load_result_icons", { paths: iconPaths })
+            .then((icons) => {
+              if (seq.current !== mySeq) return;
+              const byPath = new Map(icons.filter((hit) => hit.icon).map((hit) => [hit.path.toLowerCase(), hit.icon as string]));
+              setResults((current) => current.map((item) => {
+                const icon = item.path ? byPath.get(item.path.toLowerCase()) : undefined;
+                return icon ? { ...item, icon } : item;
+              }));
+            })
+            .catch(() => {});
+        }
       } catch { fresh(() => setResults([])); }
-    }, 90);
+    }, 45);
     return () => clearTimeout(t);
   }, [query, snippets, workflows, hasCapToken, kw]);
 

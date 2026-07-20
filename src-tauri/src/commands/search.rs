@@ -4,9 +4,24 @@ use std::sync::{Mutex, OnceLock};
 
 /// Thư mục resources chứa Everything bundled (set từ setup, trước lần search đầu)
 static BUNDLED_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static EVERYTHING_CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
+
+fn everything_child() -> &'static Mutex<Option<std::process::Child>> {
+    EVERYTHING_CHILD.get_or_init(|| Mutex::new(None))
+}
+
+/// The bundled IPC engine is owned by HeaSpot and must never outlive it.
+pub fn shutdown_everything() {
+    if let Ok(mut slot) = everything_child().lock() {
+        if let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
 
 /// Gọi một lần lúc khởi động: đăng ký đường dẫn Everything bundled và
-/// tự khởi chạy Everything.exe chạy nền nếu chưa có instance nào đang chạy.
+/// tự khởi chạy Everything.exe chạy nền nếu chưa có engine IPC nào đang chạy.
 pub fn init_everything(app: &tauri::AppHandle) {
     use tauri::Manager;
     let dir = app
@@ -18,9 +33,9 @@ pub fn init_everything(app: &tauri::AppHandle) {
     let _ = BUNDLED_DIR.set(dir.clone());
 
     std::thread::spawn(move || {
-        let Some(ev) = everything().as_ref() else {
+        if everything().is_none() {
             return; // không load được DLL -> dùng index nội bộ
-        };
+        }
         let Some(evdir) = dir.filter(|d| d.join("Everything.exe").exists()) else {
             return;
         };
@@ -39,8 +54,13 @@ pub fn init_everything(app: &tauri::AppHandle) {
             .unwrap_or_else(|| r"C:\Users".into());
         let config = format!(
             "[Everything]\r\n\
-             tray_icon=0\r\n\
+             app_data=0\r\n\
+             run_as_admin=0\r\n\
              run_in_background=1\r\n\
+             show_tray_icon=0\r\n\
+             show_in_taskbar=0\r\n\
+             minimize_to_tray=0\r\n\
+             ipc=1\r\n\
              start_in_background=1\r\n\
              update_notification=0\r\n\
              folders={home}\r\n\
@@ -53,7 +73,12 @@ pub fn init_everything(app: &tauri::AppHandle) {
              folder_update_rescan_asap=1\r\n"
         );
         let needs_migration = std::fs::read_to_string(&ini)
-            .map(|old| !old.contains("[Everything]") || !old.contains("folders="))
+            .map(|old| {
+                !old.contains("[Everything]")
+                    || !old.contains("folders=")
+                    || !old.contains("show_tray_icon=0")
+                    || !old.contains("run_as_admin=0")
+            })
             .unwrap_or(true);
         let _ = std::fs::write(&ini, config);
 
@@ -75,16 +100,20 @@ Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction Silen
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
 
-        // Nếu user có Everything đang hoạt động, ưu tiên instance đó.
-        if ev.search("winspot::ipc::probe", 1).is_some() {
-            return;
-        }
-        // -config trỏ tới ini của ta; -startup: chạy nền ngay, không hiện cửa sổ.
-        let _ = std::process::Command::new(exe)
+        // Everything SDK 1.4 chỉ kết nối được IPC instance mặc định. Không gọi
+        // Query để "probe" trước khi engine tồn tại vì QueryW(TRUE) có thể chờ
+        // rất lâu. Cứ khởi động bản bundled; Everything tự thoát nếu một engine
+        // mặc định khác đã tồn tại. -startup không hiện cửa sổ/tray.
+        if let Ok(child) = std::process::Command::new(exe)
             .arg("-config")
             .arg(&ini)
             .arg("-startup")
-            .spawn();
+            .spawn()
+        {
+            if let Ok(mut slot) = everything_child().lock() {
+                *slot = Some(child);
+            }
+        }
     });
 }
 
@@ -103,6 +132,25 @@ pub struct SearchResult {
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub engine: String, // "everything" | "internal"
+}
+
+#[derive(Serialize)]
+pub struct ResultIcon {
+    pub path: String,
+    pub icon: Option<String>,
+}
+
+/// Resolve shell icons after textual results have already been rendered. This
+/// preserves real file/folder icons without putting shell I/O on the typing
+/// critical path.
+#[tauri::command]
+pub async fn load_result_icons(paths: Vec<String>) -> Result<Vec<ResultIcon>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths.into_iter().take(20).map(|path| ResultIcon {
+            icon: crate::core::indexer::icon_for(&path),
+            path,
+        }).collect()
+    }).await.map_err(|e| e.to_string())
 }
 
 /// Chấm điểm khớp fuzzy đơn giản: prefix > word-boundary > substring > subsequence
@@ -132,6 +180,121 @@ fn score_match(name: &str, query: &str) -> Option<i32> {
     Some(base - (name_l.len().min(60) as i32) / 4)
 }
 
+/// Rank executable search hits as apps, while keeping the actual portable app
+/// above similarly named installer packages such as `Foo_1.2_setup.exe`.
+fn score_path_hit(path: &str, name: &str, query: &str, is_dir: bool, base: i32) -> (bool, i32) {
+    let file = std::path::Path::new(path);
+    let executable = !is_dir
+        && file.extension().and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
+    if !executable {
+        return (false, base);
+    }
+
+    let stem = file.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
+    let stem_normalized = normalize_search(stem);
+    let query_normalized = normalize_search(query.trim());
+    let mut score = base.max(score_match(stem, query).unwrap_or(base)) + 10_000;
+    if stem_normalized == query_normalized {
+        score += 3_000;
+    }
+    let installer = stem_normalized.contains("setup") || stem_normalized.contains("installer");
+    let asks_for_installer = query_normalized.contains("setup") || query_normalized.contains("install");
+    if installer && !asks_for_installer {
+        score -= 1_500;
+    }
+    (true, score)
+}
+
+/// Match names as users remember them, rather than only the shortcut label.
+/// Stable aliases cover the common executable/product-name mismatch and
+/// initials make queries such as "vsc" useful without weakening file search.
+fn normalize_search(value: &str) -> String {
+    value.to_lowercase().chars().map(|c| match c {
+        'á' | 'à' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' => 'a',
+        'đ' => 'd',
+        'é' | 'è' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => 'e',
+        'í' | 'ì' | 'ỉ' | 'ĩ' | 'ị' => 'i',
+        'ó' | 'ò' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ớ' | 'ờ' | 'ở' | 'ỡ' | 'ợ' => 'o',
+        'ú' | 'ù' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => 'u',
+        'ý' | 'ỳ' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
+        other => other,
+    }).collect()
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ac) in a.iter().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, bc) in b.iter().enumerate() {
+            cur[j + 1] = (cur[j] + 1).min(prev[j + 1] + 1).min(prev[j] + usize::from(ac != bc));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+fn score_app_match(app: &crate::core::indexer::AppEntry, query: &str) -> Option<i32> {
+    let q = normalize_search(query.trim());
+    let normalized = normalize_search(&app.name);
+    let mut candidates = vec![normalized.clone()];
+    let path = std::path::Path::new(&app.path);
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        candidates.push(normalize_search(stem));
+    }
+    if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) {
+        candidates.push(normalize_search(parent));
+    }
+    if let Some(app_id) = app.path.strip_prefix("shell:AppsFolder\\") {
+        candidates.extend(app_id.split(['.', '_', '!', '-']).map(normalize_search));
+    }
+    let initials: String = normalized
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| word.chars().next())
+        .collect();
+    candidates.push(initials.clone());
+    candidates.push(normalized.chars().filter(|c| c.is_alphanumeric()).collect());
+    candidates.sort();
+    candidates.dedup();
+    let mut best = candidates.iter().filter_map(|candidate| score_match(candidate, &q)).max();
+    if initials == q {
+        best = Some(best.unwrap_or(0).max(920));
+    }
+    // Generic typo tolerance: compare the query to every word in all indexed
+    // names. One typo is accepted for 4–7 chars, two for longer queries.
+    let tolerance = if q.len() >= 8 { 2 } else if q.len() >= 4 { 1 } else { 0 };
+    if tolerance > 0 {
+        for word in candidates.iter().flat_map(|c| c.split(|x: char| !x.is_alphanumeric())) {
+            if !word.is_empty() && edit_distance(word, &q) <= tolerance {
+                best = Some(best.unwrap_or(0).max(650 - edit_distance(word, &q) as i32 * 80));
+            }
+        }
+    }
+    // Multi-word fuzzy matching tolerates a typo in one token (for example
+    // "visal studio") while still requiring every query token to match some
+    // indexed token, avoiding broad/noisy semantic guesses.
+    let query_words: Vec<&str> = q.split_whitespace().collect();
+    if query_words.len() > 1 {
+        let candidate_words: Vec<&str> = candidates
+            .iter()
+            .flat_map(|c| c.split(|x: char| !x.is_alphanumeric()))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let all_match = query_words.iter().all(|needle| {
+            let allowed = if needle.len() >= 8 { 2 } else if needle.len() >= 4 { 1 } else { 0 };
+            candidate_words.iter().any(|word| {
+                word.starts_with(needle) || (allowed > 0 && edit_distance(word, needle) <= allowed)
+            })
+        });
+        if all_match {
+            best = Some(best.unwrap_or(0).max(760));
+        }
+    }
+    best
+}
+
 fn is_subsequence(needle: &str, haystack: &str) -> bool {
     let mut it = haystack.chars();
     needle.chars().all(|c| it.any(|h| h == c))
@@ -153,6 +316,7 @@ fn is_search_noise(path: &str) -> bool {
         "\\programdata\\packages\\",
         "\\$recycle.bin\\",
         "\\system volume information\\",
+        "\\resources\\heaspot-everything\\",
     ]
     .iter()
     .any(|part| p.contains(part))
@@ -186,12 +350,20 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
         };
     }
 
+    // Adaptive ranking: frequently/recently launched apps receive a modest
+    // boost, never enough to make an unrelated app match.
+    let usage: std::collections::HashMap<String, i32> = state.db.lock().ok().and_then(|conn| {
+        let mut stmt = conn.prepare("SELECT path, launch_count FROM launch_usage").ok()?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))).ok()?;
+        Some(rows.flatten().map(|(path, count)| (path.to_lowercase(), count)).collect())
+    }).unwrap_or_default();
+
     // 1. Apps
     if let Ok(apps) = state.apps.read() {
         let mut scored: Vec<SearchResult> = apps
             .iter()
             .filter_map(|a| {
-                score_match(&a.name, &query).map(|s| SearchResult {
+                score_app_match(a, &query).map(|s| SearchResult {
                     title: a.name.clone(),
                     subtitle: if a.path.starts_with("shell:AppsFolder\\") {
                         "Ứng dụng Windows".into()
@@ -203,7 +375,7 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
                     // App LUÔN xếp trên file/folder: cộng offset lớn hơn điểm khớp tối đa
                     // của file (~1000). Nhờ vậy "vscode" -> app "Visual Studio Code" (khớp
                     // mờ) vẫn thắng các folder ".vscode" khớp tên chính xác.
-                    score: s + 10_000,
+                    score: s + 10_000 + usage.get(&a.path.to_lowercase()).copied().unwrap_or(0).min(25) * 8,
                     icon: a.icon.clone(),
                 })
             })
@@ -215,7 +387,10 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
 
     // 2. Files: ưu tiên Everything nếu có
     let mut engine = "internal".to_string();
-    if let Some(hits) = everything().as_ref().and_then(|e| e.search(&query, 12)) {
+    // Everything mặc định sắp xếp theo tên/path. Lấy một tập ứng viên đủ rộng
+    // rồi tự chấm điểm; nếu chỉ xin 12 kết quả thì các folder/build metadata có
+    // thể đẩy chính file `winspot.exe` (hoặc app portable khác) ra khỏi tập.
+    if let Some(hits) = everything().as_ref().and_then(|e| e.search(&query, 200)) {
         engine = "everything".into();
         for (path, is_dir) in hits {
             if is_search_noise(&path) {
@@ -226,10 +401,11 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.clone());
             let score = score_match(&name, &query).unwrap_or(100);
+            let (executable, score) = score_path_hit(&path, &name, &query, is_dir, score);
             results.push(SearchResult {
                 title: name,
                 subtitle: path.clone(),
-                kind: if is_dir { "folder" } else { "file" }.into(),
+                kind: if is_dir { "folder" } else if executable { "app" } else { "file" }.into(),
                 path,
                 score,
                 icon: None,
@@ -239,14 +415,16 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
         let mut scored: Vec<SearchResult> = files
             .iter()
             .filter_map(|f| {
-                score_match(&f.name, &query).map(|s| SearchResult {
+                score_match(&f.name, &query).map(|s| {
+                    let (executable, score) = score_path_hit(&f.path, &f.name, &query, f.is_dir, s);
+                    SearchResult {
                     title: f.name.clone(),
                     subtitle: f.path.clone(),
-                    kind: if f.is_dir { "folder" } else { "file" }.into(),
+                    kind: if f.is_dir { "folder" } else if executable { "app" } else { "file" }.into(),
                     path: f.path.clone(),
-                    score: s,
+                    score,
                     icon: None,
-                })
+                }})
             })
             .collect();
         scored.sort_by(|a, b| b.score.cmp(&a.score));
@@ -261,12 +439,10 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
     results.retain(|r| seen_paths.insert(r.path.to_lowercase()));
     results.truncate(15);
-    // Trích icon thật cho file/folder (chỉ tập kết quả cuối, có cache theo path)
-    for r in results.iter_mut() {
-        if r.icon.is_none() && (r.kind == "file" || r.kind == "folder") {
-            r.icon = crate::core::indexer::icon_for(&r.path);
-        }
-    }
+    // File/folder icon extraction uses the Windows shell and can stall a
+    // keystroke for hundreds of milliseconds on network/offline paths. Apps
+    // already have cached icons; files intentionally use the instant generic
+    // icon in the result list.
     SearchResponse { results, engine }
 }
 
@@ -318,6 +494,7 @@ impl Everything {
         type SetSearchW = unsafe extern "system" fn(*const u16);
         type SetMax = unsafe extern "system" fn(u32);
         type QueryW = unsafe extern "system" fn(i32) -> i32;
+        type IsDbLoaded = unsafe extern "system" fn() -> i32;
         type GetNumResults = unsafe extern "system" fn() -> u32;
         type GetFullPathW = unsafe extern "system" fn(u32, *mut u16, u32) -> u32;
         type IsFolderResult = unsafe extern "system" fn(u32) -> i32;
@@ -330,6 +507,8 @@ impl Everything {
                 self.lib.get(b"Everything_SetMax\0").ok()?;
             let query_fn: libloading::Symbol<QueryW> =
                 self.lib.get(b"Everything_QueryW\0").ok()?;
+            let is_db_loaded: libloading::Symbol<IsDbLoaded> =
+                self.lib.get(b"Everything_IsDBLoaded\0").ok()?;
             let num_results: libloading::Symbol<GetNumResults> =
                 self.lib.get(b"Everything_GetNumResults\0").ok()?;
             let get_path: libloading::Symbol<GetFullPathW> =
@@ -338,6 +517,11 @@ impl Everything {
                 self.lib.get(b"Everything_IsFolderResult\0").ok()?;
 
             let wide: Vec<u16> = query.encode_utf16().chain(std::iter::once(0)).collect();
+            // Khi app vừa khởi động, fallback sang index nội bộ thay vì block
+            // nhịp gõ đầu tiên trong lúc Everything còn đang nạp database.
+            if is_db_loaded() == 0 {
+                return None;
+            }
             set_search(wide.as_ptr());
             set_max(max);
             // TRUE = chờ kết quả (Everything service phải đang chạy)
@@ -569,7 +753,54 @@ try {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_everything_content_query, is_fulltext_document, is_search_noise};
+    use super::{build_everything_content_query, is_fulltext_document, is_search_noise, score_app_match, score_path_hit};
+
+    #[test]
+    fn app_aliases_match_product_names() {
+        let code = crate::core::indexer::AppEntry {
+            name: "Visual Studio Code".into(),
+            path: r"C:\Apps\Microsoft VS Code\Code.exe".into(),
+            icon: None,
+        };
+        let edge = crate::core::indexer::AppEntry {
+            name: "Microsoft Edge".into(),
+            path: r"C:\Apps\Edge\msedge.exe".into(),
+            icon: None,
+        };
+        assert!(score_app_match(&code, "code").unwrap() >= 950);
+        assert!(score_app_match(&code, "vscode").is_some());
+        assert!(score_app_match(&code, "vsc").is_some());
+        assert!(score_app_match(&code, "visal studio").is_some());
+        assert!(score_app_match(&edge, "edge").is_some());
+        assert!(score_app_match(&code, "unrelated folder").is_none());
+    }
+
+    #[test]
+    fn exact_portable_app_ranks_above_its_installer_and_folder() {
+        let (_, portable) = score_path_hit(
+            r"C:\Apps\winspot.exe",
+            "winspot.exe",
+            "winspot",
+            false,
+            800,
+        );
+        let (_, installer) = score_path_hit(
+            r"C:\Downloads\WinSpot_0.1.2_x64-setup.exe",
+            "WinSpot_0.1.2_x64-setup.exe",
+            "winspot",
+            false,
+            800,
+        );
+        let (_, folder) = score_path_hit(
+            r"C:\Projects\winspot",
+            "winspot",
+            "winspot",
+            true,
+            1_000,
+        );
+        assert!(portable > installer);
+        assert!(portable > folder);
+    }
 
     #[test]
     fn filters_windows_component_and_store_package_paths() {
