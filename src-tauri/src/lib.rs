@@ -22,6 +22,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(crate::core::hotkey::build_plugin())
         .manage(state)
         .setup(|app| {
@@ -65,6 +66,19 @@ pub fn run() {
             commands::knowledge::quick_answer,
             commands::currency::currency_convert,
             commands::ocr::capture_ocr,
+            commands::otp::preview_otp,
+            commands::otp::add_otp_account,
+            commands::otp::quick_add_otp_account,
+            commands::otp::list_otp_accounts,
+            commands::otp::rename_otp_account,
+            commands::otp::toggle_otp_pin,
+            commands::otp::set_otp_archived,
+            commands::otp::delete_otp_account,
+            commands::otp::copy_otp_code,
+            commands::otp::list_otp_history,
+            commands::otp::clear_otp_history,
+            commands::otp::export_otp_backup,
+            commands::otp::import_otp_backup,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::study::save_study_word,

@@ -6,11 +6,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { ResultList } from "./components/ResultList";
 import { ClipboardView } from "./components/ClipboardView";
+import { OtpView } from "./components/OtpView";
 import { KnowledgePreview } from "./components/KnowledgePreview";
 import { actionsFor, ContextMenu, type CtxAction } from "./components/ContextMenu";
 import { useKeyboardNav } from "./hooks/useKeyboardNav";
 import { useSearch } from "./hooks/useSearch";
-import { resolveKeywords, DEFAULT_KEYWORDS, type KwMap } from "./keywords";
+import { resolveKeywords, DEFAULT_KEYWORDS, matchWord, type KwMap } from "./keywords";
 import { applyTheme } from "./theme";
 import type { AppSettings, ClipItem, ResultItemData, UiMode } from "./types";
 
@@ -41,8 +42,13 @@ export default function App() {
   const [autoPaste, setAutoPaste] = useState(true);
   const [pwToHistory, setPwToHistory] = useState(false);
   const [uninstallPrompt, setUninstallPrompt] = useState<UninstallPrompt>();
+  const [otpQuickSubmit, setOtpQuickSubmit] = useState(0);
 
   const { results, engine } = useSearch(mode === "search" ? query : "", refreshKey, kw);
+  const otpArg = mode === "search" ? matchWord(query, kw.otp) : null;
+  const otpActive = otpArg !== null;
+  const otpQuickMatch = otpArg !== null ? /^\+\s*(.*)$/s.exec(otpArg) : null;
+  const otpQuickInput = otpQuickMatch ? otpQuickMatch[1].trim() : null;
   const routedResults = results.flatMap((item): ResultItemData[] => {
     if (item.kind !== "process-group") return [item];
     const expanded = expandedProcessGroups.has(item.id);
@@ -62,7 +68,7 @@ export default function App() {
   });
   const visibleResults = mode === "search" && ocrItem ? [ocrItem] : routedResults;
 
-  const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" ? visibleResults : [];
+  const navItems: unknown[] = mode === "clipboard" ? clipItems : mode === "search" && !otpActive ? visibleResults : [];
   const { index, setIndex, move } = useKeyboardNav(navItems);
   const selectedClip = mode === "clipboard" ? clipItems[index] : undefined;
   const selectedResult = mode === "search" ? visibleResults[index] : undefined;
@@ -230,6 +236,10 @@ export default function App() {
       apply(900, 520);
       return;
     }
+    if (otpActive) {
+      apply(900, 640);
+      return;
+    }
     if (showKnowledge || detailTrigger) {
       apply(900, 520);
       return;
@@ -251,7 +261,7 @@ export default function App() {
     // con trỏ -> hover lại -> vòng lặp giật "đùng đùng". Menu context vẫn đúng vì
     // index cố định tại thời điểm ctxOpen bật.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleResults.length, mode, showKnowledge, detailTrigger, ctxOpen, uninstallPrompt]);
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger, otpActive, ctxOpen, uninstallPrompt]);
 
   const hide = () => {
     setUninstallPrompt(undefined);
@@ -608,6 +618,17 @@ export default function App() {
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (otpActive) {
+      if (e.key === "Enter" && otpQuickInput) {
+        e.preventDefault();
+        setOtpQuickSubmit((value) => value + 1);
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hide();
+      }
+      return;
+    }
     // Context menu đang mở: điều hướng bên trong menu
     if (ctxOpen && mode === "search") {
       const item = visibleResults[index];
@@ -725,7 +746,7 @@ export default function App() {
       className={`relative flex flex-col rounded-2xl overflow-hidden
                  bg-white/95 dark:bg-zinc-900/95
                  border border-black/10 dark:border-white/10
-                 ${mode !== "search" || ctxOpen || uninstallPrompt ? "h-screen" : ""}`}
+                 ${mode !== "search" || otpActive || ctxOpen || uninstallPrompt ? "h-screen" : ""}`}
     >
       <SearchBar
         ref={inputRef}
@@ -739,7 +760,16 @@ export default function App() {
         onKeyDown={onKeyDown}
       />
 
-      {mode === "search" ? (
+      {mode === "search" ? otpActive ? (
+        <OtpView
+          initialInput={otpQuickInput === null ? otpArg || "" : ""}
+          quickInput={otpQuickInput}
+          quickSubmitToken={otpQuickSubmit}
+          onConsumeInput={otpQuickInput === null ? () => setQuery(kw.otp) : undefined}
+          onQuickComplete={() => setQuery(kw.otp)}
+          onFocusSearch={() => inputRef.current?.focus()}
+        />
+      ) : (
         <>
           <div className={showKnowledge ? "flex h-[414px]" : ""}>
             <div className={showKnowledge ? "w-[360px] shrink-0 overflow-hidden" : ""}>
@@ -812,7 +842,7 @@ export default function App() {
         />
       )}
 
-      {(mode === "clipboard" || visibleResults.length > 0) && (
+      {(mode === "clipboard" || (!otpActive && visibleResults.length > 0)) && (
         <div
           className="flex items-center justify-between px-4 py-1.5 shrink-0
                      border-t border-black/5 dark:border-white/10

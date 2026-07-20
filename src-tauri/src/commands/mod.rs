@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod currency;
 pub mod knowledge;
 pub mod ocr;
+pub mod otp;
 pub mod search;
 pub mod settings;
 pub mod study;

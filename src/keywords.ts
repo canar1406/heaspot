@@ -34,6 +34,7 @@ export const KW_FEATURES: KwFeature[] = [
   { id: "time", label: "Giờ thế giới", def: "time", kind: "word", example: "time tokyo", group: "Tiện ích" },
   { id: "url", label: "Mở URL", def: "url", kind: "word", example: "url github.com", group: "Tiện ích" },
   { id: "password", label: "Mật khẩu trình duyệt (bật trong Settings)", def: "pw", kind: "word", example: "pw github", group: "Tiện ích" },
+  { id: "otp", label: "Quản lý mã xác thực 2FA / OTP", def: "otp", kind: "word", example: "otp", group: "Tiện ích" },
   { id: "generator", label: "Tạo UUID / hash / base64", def: "#", kind: "prefix", example: "#uuid", group: "Tiện ích" },
   { id: "snippet", label: "Snippet gõ tắt", def: ";", kind: "prefix", example: ";mail", group: "Tiện ích" },
   // Dev tools

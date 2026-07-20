@@ -2,13 +2,18 @@
 
 **HeaSpot** — launcher kiểu **Spotlight (macOS) / Alfred** cho Windows, xây bằng **Tauri (Rust + React)**. Siêu nhẹ (~10 MB RAM khi ẩn), keyboard-first, mở tức thì.
 
-### Mới trong v0.1.8
+### Mới trong v0.1.15
 
-- `in` dùng chiến lược hybrid: Windows Search nhanh trước, tự fallback Everything `content:` khi file nằm ngoài index; mỗi kết quả hiện đúng engine thực tế.
-- Sửa instance Everything bundled có thể chạy với database rỗng: portable Folder Index theo user home, monitor thay đổi, không cần service hay UAC.
-- Khóa trạng thái Everything SDK để search tên file và content search không ghi đè nhau; lọc cây cache/build để fallback nhanh hơn.
-- Thêm trạng thái loading cho full-text, cache kết quả và bộ smoke test có fixture thật.
-- README được mở rộng toàn bộ kiến trúc/kỹ thuật và ảnh tài liệu được chụp lại bằng profile cô lập, nền sạch.
+- **Kho xác thực 2FA/OTP cục bộ**: TOTP/HOTP, SHA-1/SHA-256/SHA-512, 6–8 chữ số, chu kỳ tùy URI; nhận secret Base32 có dấu cách và URI `otpauth://` của Google/Microsoft/OATH.
+- Gõ `otp` để quản lý; gõ **`otp + <secret>` rồi Enter** để thêm nhanh, lưu tài khoản, sinh và copy OTP ngay. Secret trùng không tạo bản sao.
+- Mỗi tài khoản có tên gợi nhớ, chú thích, ngày thêm/cập nhật, ghim, lưu trữ và lịch sử những OTP đã bấm Copy.
+- Secret và OTP history được mã hóa bằng **Windows DPAPI**. Backup di động `.heaspot2fa` dùng **Argon2id + AES-256-GCM**, giữ đầy đủ secret/cấu hình/chú thích/ngày/history và chống import trùng.
+- Hỗ trợ Microsoft **OATH-TOTP**. Push `Approve sign-in`, number matching, passwordless và cặp URL HTTPS + activation code vẫn thuộc giao thức đăng ký riêng của Microsoft Authenticator, không phải secret OTP.
+- Search ưu tiên đúng **app/executable** hơn folder, installer và file trùng tên; app portable cũng được nhận diện và xếp hạng như ứng dụng.
+- Everything 1.4 được nhúng làm engine nền của HeaSpot, cấu hình không tray/không admin; app chỉ quản lý đúng tiến trình bundled của mình và không đụng instance Everything riêng của người dùng.
+- Gỡ cài đặt chạy đúng uninstaller từ Registry thay vì đẩy sang Control Panel; bản portable được xóa trực tiếp sau xác nhận khi đường dẫn an toàn.
+- Clipboard hoạt động như danh sách MRU: copy lại nội dung cũ sẽ **move** item đó lên đầu thay vì nhân bản; vẫn giữ trạng thái ghim và dọn cache ảnh cũ.
+- Thêm mục `emoji` riêng, tìm thông minh bằng tiếng Việt/Anh; các hộp xác nhận nội bộ thay thế dialog trình duyệt để không còn đè lớp giao diện.
 
 ## Phím tắt toàn cục
 
@@ -44,6 +49,10 @@
 | `json` | **Dev**: format/minify/kiểm tra JSON trong clipboard |
 | `jwt <token>` | **Dev**: giải mã JWT (header/payload, exp) |
 | `pw <từ khoá>` | **Mật khẩu trình duyệt** đã lưu (bật trong Settings) |
+| `otp` | Mở **kho 2FA/OTP**: mã sống, history, ghim, lưu trữ, chú thích và backup |
+| `otp + <secret/otpauth URI>` | Thêm nhanh 2FA; `Enter` lưu, sinh và copy OTP hiện tại; không nhân bản secret trùng |
+| `emoji <mô tả>` | Tìm emoji bằng tiếng Việt/Anh, ví dụ `emoji cảm ơn`, `emoji rocket` |
+| `ocr` | Chụp một vùng màn hình và nhận dạng tiếng Việt + Anh offline |
 | `< <tên>` | **Window Walker** — chuyển cửa sổ đang mở |
 | `{ <tên>` | Mở project VS Code gần đây |
 | `! <tên>` | Windows Services (→ Start/Stop/Restart) |
@@ -59,6 +68,16 @@
 ![Tìm & mở app với icon thật](docs/screenshots/app-search.png)
 
 ![Context Menu điều hướng hoàn toàn bằng bàn phím](docs/screenshots/context-menu.png)
+
+### Tìm app, file và gỡ cài đặt
+
+- Kết quả được xếp hạng theo loại và độ khớp thực tế: app/executable chính xác đứng trên installer, folder và file phụ trùng tên. Thuật toán dùng exact, prefix, token/word-boundary, substring và subsequence; không chỉ vá riêng vài alias như `code`.
+- App được lấy từ Start Menu, Registry App Paths, Registry uninstall entries và UWP/Store; executable portable do Everything tìm thấy cũng được nhận diện là app. Icon Shell/Appx vẫn được tải và cache bất đồng bộ để giao diện không khựng nhưng không mất icon thật.
+- Nhấn `→` trên app để mở Context Menu: Open, Run as administrator, Open location, Copy path và **Gỡ cài đặt…**.
+- Gỡ cài đặt tra đúng `UninstallString`/`QuietUninstallString` theo tên và đường dẫn app trong Registry, ưu tiên uninstaller tương tác của nhà phát hành. HeaSpot không mở danh sách Control Panel thay cho thao tác gỡ.
+- Với executable portable không có uninstall entry, HeaSpot chỉ cho xóa chính file `.exe` sau xác nhận nếu file nằm ngoài Windows/Program Files và không phải thư mục, tránh xóa nhầm phạm vi rộng.
+
+Everything là engine con được đóng gói cùng HeaSpot. Bản bundled chạy nền bằng cấu hình riêng trong data directory, không có tray icon, không yêu cầu admin/service và kết thúc khi HeaSpot thoát. Khi phát hiện một Everything do người dùng tự cài, HeaSpot không kill, sửa cấu hình hay gỡ bản đó.
 
 ### Full-text trong tài liệu (`in`)
 
@@ -124,6 +143,7 @@ Nguồn dữ liệu dùng **Serper.dev** (gói miễn phí 2.500 lượt, không
 Giao diện 2 cột kiểu Alfred: danh sách bên trái, **preview chỉnh sửa trực tiếp** bên phải.
 
 - Lưu **text, link, ảnh (thumbnail + preview), danh sách file** — dán file thật (CF_HDROP), không chỉ dán đường dẫn.
+- Clipboard là danh sách MRU thực sự: copy lại nội dung đã có sẽ cập nhật thời gian và **move đúng item đó lên đầu**, không tạo thêm bản sao ở vị trí cũ; trạng thái ghim vẫn được giữ nguyên.
 - `Enter` **auto-paste** thẳng vào cửa sổ trước · `⇧Enter` dán plain text · `Ctrl+1..9` dán nhanh
 - `Ctrl+P` ghim (item ghim không bị xóa tự động) · `Ctrl+S` biến thành Snippet · `Del` xóa
 - Mỗi hàng bên trái có icon **Ghim** và **Xóa** để click trực tiếp mà không làm mất focus bàn phím.
@@ -135,6 +155,51 @@ Giao diện 2 cột kiểu Alfred: danh sách bên trái, **preview chỉnh sử
 ![Clipboard Manager 2 cột](docs/screenshots/clipboard.png)
 
 ![Zoom ảnh trong preview](docs/screenshots/image-zoom.png)
+
+## Quản lý 2FA / OTP (`otp`)
+
+HeaSpot có một kho authenticator cục bộ riêng, không cần mạng để tạo mã. Gõ `otp` để mở màn hình quản lý gồm **Đang dùng**, **Lưu trữ** và **Lịch sử copy**.
+
+### Chuẩn và định dạng hỗ trợ
+
+- `otpauth://totp/...` và `otpauth://hotp/...` chuẩn.
+- Secret Base32 viết liền hoặc chia nhóm bằng dấu cách, `-`, `_`, có/không có padding `=`; tự viết hoa và sửa nhầm OCR phổ biến `0 → O`, `1 → I` vì Base32 chuẩn không dùng 0/1.
+- TOTP/HOTP, SHA-1/SHA-256/SHA-512, 6–8 chữ số; chu kỳ TOTP 15–300 giây khi URI khai báo.
+- Tự đọc `issuer`, tên tài khoản, thuật toán, số chữ số, period/counter từ URI và nhận diện nhãn Microsoft, Google hoặc OATH.
+
+Ví dụ thao tác nhanh:
+
+```text
+otp + JBSW Y3DP EHPK 3PXP
+```
+
+Nhấn `Enter`: HeaSpot kiểm tra secret, tìm tài khoản đã tồn tại, tạo mới nếu cần, lưu secret, sinh mã hiện tại và copy mã để dán ngay. Nếu tài khoản trùng đang nằm trong Lưu trữ, nó được khôi phục về Đang dùng thay vì tạo bản thứ hai. Chuỗi sau keyword `otp` được chặn ngay tại router và không bao giờ đi tiếp sang Google/web search hoặc provider tìm kiếm khác.
+
+Khi thêm bằng form, có thể đặt **tên gợi nhớ** và **chú thích** như email, công ty/phòng ban hay mục đích sử dụng. Mỗi thẻ hiển thị provider, TOTP/HOTP, thuật toán, mã sống, vòng đếm thời gian, ngày thêm và ngày cập nhật. Có thể đổi tên/chú thích, ghim, lưu trữ/khôi phục hoặc xóa bằng xác nhận hai bước.
+
+History chỉ ghi những OTP người dùng thực sự bấm **Copy**; việc UI cập nhật mã mỗi giây không tự làm đầy lịch sử. HOTP tăng counter sau lần copy thành công. OTP và password được ghi vào clipboard bằng format `ExcludeClipboardContentFromMonitorProcessing`, vì vậy Windows Clipboard History và HeaSpot Clipboard Manager không thu lại secret/mã vừa copy.
+
+### Lưu trữ và backup khi chuyển máy
+
+- Trong SQLite, secret tài khoản và từng OTP history đều được mã hóa bằng **Windows DPAPI**, ràng buộc với user Windows hiện tại; database copy thô sang máy khác không giải mã được.
+- **Xuất backup** tạo file `.heaspot2fa` chứa tài khoản, secret, cấu hình OTP, tên, chú thích, ghim, trạng thái lưu trữ, ngày tạo/cập nhật và history.
+- Backup di động dùng khóa dẫn xuất **Argon2id** và mã hóa xác thực **AES-256-GCM** với salt/nonce ngẫu nhiên. Mật khẩu tối thiểu 8 ký tự và không được lưu trong app.
+- **Nhập backup** kiểm tra định dạng/phiên bản, giải mã bằng mật khẩu, bỏ qua tài khoản trùng, tránh nhân đôi history khi import lại cùng file, rồi mã hóa lại dữ liệu bằng DPAPI của máy Windows mới.
+- Không có cơ chế khôi phục mật khẩu backup. Cần giữ file và mật khẩu ở hai nơi an toàn khác nhau.
+
+### Microsoft Authenticator: phần dùng được và giới hạn
+
+HeaSpot thay thế được phần **OATH-TOTP** khi trang Microsoft cho chọn **I want to use a different authenticator app** hoặc **Use a verification code**. Microsoft Entra hỗ trợ authenticator bên thứ ba dùng OATH-TOTP nếu quản trị viên không vô hiệu hóa phương thức này: [Microsoft Learn — OATH tokens](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-authentication-oath-tokens).
+
+| Dữ liệu/luồng Microsoft | HeaSpot |
+|---|---|
+| Secret Base32 hoặc URI `otpauth://totp/...` | Hỗ trợ |
+| Mã OTP 6 số đang chạy | Dùng để đăng nhập, **không** dùng để nhập tài khoản vì không suy ngược được secret |
+| QR chuẩn OATH | Dùng được sau khi lấy secret/URI; v0.1.15 chưa đọc trực tiếp ảnh QR |
+| URL `https://...` + activation code từ **Can't scan image** | Không hỗ trợ; đây là đăng ký thiết bị/push riêng, không phải secret TOTP |
+| `Approve sign-in?`, number matching, passwordless | Vẫn cần Microsoft Authenticator |
+
+Cặp URL HTTPS + activation code chỉ là cách nhập thủ công QR đăng ký Microsoft Authenticator; bước tiếp theo vẫn gửi notification thử đến thiết bị. Không dán cặp này vào `otp +`. Tài khoản cơ quan có thể bị admin bắt buộc dùng Microsoft Authenticator và ẩn lựa chọn authenticator khác; HeaSpot không vượt qua chính sách tenant. Xem luồng chính thức: [Microsoft Support — thiết lập Security info](https://support.microsoft.com/en-US/accounts-billing/work-school/set-up-security-info-from-a-sign-in-page).
 
 ## Snippets (`;`) — gõ tắt
 
@@ -197,12 +262,12 @@ Bản phát hành đã **nhúng sẵn Tesseract 5 và hai model `vie+eng`** tron
 ```mermaid
 flowchart LR
     A["Global hotkey / Win+V / Tray"] --> B["Tauri window controller"]
-    B --> C["React UI: Search / Clipboard / Settings"]
+    B --> C["React UI: Search / Clipboard / OTP / Settings"]
     C --> D["useSearch + keyword router"]
     D --> E["Plugin TypeScript cục bộ"]
     D --> F["Tauri IPC commands"]
     F --> G["Everything / Windows Search / Windows API"]
-    F --> H["SQLite + cache + clipboard"]
+    F --> H["SQLite + DPAPI vault + cache + clipboard"]
     F --> I["HTTP API tùy chọn"]
     E --> J["Result list + detail preview"]
     G --> J
@@ -215,10 +280,10 @@ App là kiến trúc **desktop hai lớp**: WebView chỉ phụ trách giao di�
 
 ### Frontend (`src/`)
 
-- **React 18 + TypeScript + Vite**: `App.tsx` điều phối ba mode Search/Clipboard/Settings; `main.tsx` dùng cùng bundle nhưng render `SettingsView` cho cửa sổ `settings` riêng.
+- **React 18 + TypeScript + Vite**: `App.tsx` điều phối Search/Clipboard và panel quản lý OTP; `main.tsx` dùng cùng bundle nhưng render `SettingsView` cho cửa sổ `settings` riêng.
 - **Tailwind CSS + CSS toàn cục**: theme sáng/tối/system, layout hai cột, trạng thái selected/focus và các icon action.
 - **Framer Motion**: animation mở launcher bằng opacity/scale/translate; không remount cây UI. Native window chỉ resize khi kích thước thật sự đổi để tránh khựng khi gõ/chuyển mode.
-- **Router theo keyword trong `useSearch.ts`**: chỉ kích hoạt tính năng khi token đầu khớp đúng keyword (`in`, `tr`, `conv`, `ps`…), debounce request async và dùng sequence guard để kết quả cũ không ghi đè truy vấn mới.
+- **Router theo keyword trong `useSearch.ts`**: chỉ kích hoạt tính năng khi token đầu khớp đúng keyword (`in`, `tr`, `conv`, `ps`, `otp`…), debounce request async và dùng sequence guard để kết quả cũ không ghi đè truy vấn mới. Riêng secret sau `otp +` được giữ cục bộ và không chuyển sang provider tìm kiếm mạng.
 - **Plugin chạy cục bộ trong `src/plugins/`**: calculator, converter/cơ số, timezone, công thức, hoá học, JSON/JWT, LaTeX, generator, URL/web/system command parser. Các phép tính này không gọi mạng.
 - **Điều hướng bàn phím**: `useKeyboardNav` giữ selection hợp lệ khi list async thay đổi; Context Menu, nhóm process và Clipboard đều dùng chung quy ước ↑/↓/←/→/Enter/Esc.
 - **Preview theo loại dữ liệu**: `KnowledgePreview` hiển thị dịch/từ điển/wiki/formula/OCR; `ZoomableImage` xử lý zoom theo con trỏ và pan ảnh; Clipboard preview hỗ trợ sửa tự lưu.
@@ -229,7 +294,7 @@ App là kiến trúc **desktop hai lớp**: WebView chỉ phụ trách giao di�
 - **`core/window.rs`**: show/hide/focus, resize native, giữ foreground window để auto-paste, trim working set khi ẩn và context menu gỡ cài đặt/run admin/open location.
 - **`core/hotkey.rs`**: global shortcut mặc định và hotkey riêng từng feature; khi gọi trên đoạn đang bôi đen, app tạm copy selection, chặn clipboard watcher, khôi phục clipboard cũ rồi prefill keyword.
 - **`core/indexer.rs` + `core/icons.rs`**: quét Start Menu, Registry App Paths và UWP/Store qua `Get-StartApps`; mở UWP bằng `shell:AppsFolder`; trích icon Shell hoặc asset trong AppxManifest và cache dưới dạng PNG data URL.
-- **`commands/`**: search/full-text, clipboard, settings, snippets, OCR, translate/wiki/Google quick answer, Capacities, study words và Windows system actions.
+- **`commands/`**: search/full-text, clipboard, OTP/authenticator và backup mã hóa, settings, snippets, OCR, translate/wiki/Google quick answer, Capacities, study words và Windows system actions.
 - **`plugins/` phía Rust**: process/task manager, services, registry, VS Code recent projects, window walker, browser passwords, Alfred Workflow và generator/hash.
 - **Windows API qua `windows-sys`**: foreground/focus, phím giả lập, GDI/capture, Shell, COM, clipboard/CF_HDROP, process/token privilege, DPAPI, power/shutdown và memory trimming. PowerShell ẩn chỉ được dùng cho các bề mặt Windows phù hợp như UWP discovery, Windows Search OLE DB và một số system query.
 
@@ -243,26 +308,28 @@ App là kiến trúc **desktop hai lớp**: WebView chỉ phụ trách giao di�
 | Note | Capacities API | Chạy song song với full-text khi đã cấu hình token |
 | Wiki/dịch/Google | Wikipedia, Google Translate/Dictionary, Serper | Cache RAM; Google quick answer fallback DuckDuckGo khi chưa có key |
 
-Everything 1.4.1 được nhúng và chạy nền ẩn. Để không đòi UAC hay cài Everything Service, instance portable của HeaSpot dùng **Folder Index + change monitor cho thư mục user home**; nếu máy đã có instance Everything hoạt động thì SDK dùng trực tiếp instance đó. SDK giữ trạng thái truy vấn cấp process nên backend đặt `Mutex` quanh mọi query, tránh search tên file và fallback `content:` ghi đè lẫn nhau. Với `in`, `content:` luôn đặt **sau** bộ lọc `file:`, đường dẫn home, danh sách extension và loại AppData/node_modules/.git/target/dist để giảm lượng file phải mở. Kho hệ thống WinSxS/WindowsApps/AppRepository, Recycle Bin và file `.exe/.dll` bị lọc khỏi kết quả.
+Everything 1.4.1 được nhúng và chạy nền ẩn. Để không đòi UAC hay cài Everything Service, engine portable của HeaSpot dùng **Folder Index + change monitor cho thư mục user home**. HeaSpot chỉ quản lý/kết thúc tiến trình có executable nằm trong tài nguyên bundled của chính app; một bản Everything do người dùng cài riêng sẽ không bị kill, sửa cấu hình hay gỡ cài đặt. SDK giữ trạng thái truy vấn cấp process nên backend đặt `Mutex` quanh mọi query, tránh search tên file và fallback `content:` ghi đè lẫn nhau. Với `in`, `content:` luôn đặt **sau** bộ lọc `file:`, đường dẫn home, danh sách extension và loại AppData/node_modules/.git/target/dist để giảm lượng file phải mở. Kho hệ thống WinSxS/WindowsApps/AppRepository, Recycle Bin và file `.exe/.dll` bị lọc khỏi kết quả.
 
 ### Dữ liệu, cache và vòng đời
 
-- **SQLite bundled (`rusqlite`)** tại `%APPDATA%\heaspot\heaspot.db`, bật **WAL** để watcher ghi trong khi UI đọc. Bảng chính: `clipboard`, `snippets`, `settings`, `study_words`; migration cột chạy idempotent lúc mở DB.
-- **Clipboard watcher** poll cục bộ, nhận text/link/image/file list (CF_HDROP), deduplicate, phát event realtime và auto-prune theo số item/số ngày. Item ghim được bảo toàn; ảnh PNG/thumbnail nằm trong thư mục `clips` cạnh DB.
+- **SQLite bundled (`rusqlite`)** tại `%APPDATA%\heaspot\heaspot.db`, bật **WAL** để watcher ghi trong khi UI đọc. Bảng chính: `clipboard`, `snippets`, `settings`, `study_words`, `otp_accounts`, `otp_history`; migration cột chạy idempotent lúc mở DB.
+- **Clipboard watcher** poll cục bộ, nhận text/link/image/file list (CF_HDROP), deduplicate theo kiểu MRU, phát event realtime và auto-prune theo số item/số ngày. Copy trùng chỉ cập nhật/move item cũ; item ghim được bảo toàn, còn ảnh PNG/thumbnail nằm trong thư mục `clips` cạnh DB.
+- **Kho OTP** lưu metadata, cấu hình TOTP/HOTP và ngày tháng trong SQLite; secret và giá trị history được mã hóa riêng trước khi ghi. Việc import backup luôn chạy qua kiểm tra phiên bản, chống trùng và mã hóa lại cho user Windows hiện tại.
 - **Cache RAM có giới hạn** cho icon, translate/wiki/quick answer/full-text/Capacities; nút Clear cache xoá cache lookup và ảnh mồ côi nhưng không xoá dữ liệu người dùng.
 - **Everything/Tesseract là tài nguyên nhúng**. Tesseract 5 dùng model `vie+eng`; script build kiểm SHA-256 và chỉ đóng gói runtime/model cần thiết để không phình bộ cài hoặc sinh cache tải về.
 - Biến `HEASPOT_DATA_DIR` chỉ dành cho smoke test/tài liệu: chuyển DB và cache sang profile tạm, bảo đảm quá trình chụp ảnh không đọc clipboard/settings thật.
 
 ### Bảo mật và riêng tư
 
-- Mặc định các tính năng nhạy cảm như browser password bị tắt. Secret giải mã bằng **Windows DPAPI + AES-GCM** trong đúng user session, không gửi mạng và mặc định không ghi history.
-- Privacy Guard bỏ qua password manager cấu hình sẵn và clipboard có format `ExcludeClipboardContentFromMonitorProcessing`.
+- Mặc định các tính năng nhạy cảm như browser password bị tắt. Dữ liệu nhạy cảm cục bộ chỉ được giải mã trong đúng user session và không gửi mạng.
+- Secret 2FA cùng giá trị OTP history được bảo vệ bằng **Windows DPAPI**. File backup di động dùng **Argon2id + AES-256-GCM**; app không lưu mật khẩu backup và không thể khôi phục nếu người dùng quên.
+- Privacy Guard bỏ qua password manager cấu hình sẵn. OTP/secret được copy với format `ExcludeClipboardContentFromMonitorProcessing`, nên không quay lại Windows Clipboard History hoặc kho clipboard của HeaSpot.
 - API key/token chỉ lưu trong SQLite cục bộ. Tính năng nào cần mạng đều tách khỏi search mặc định và chỉ chạy khi đúng keyword.
 - Run as administrator, kill process và uninstall là hành động rõ ràng trong Context Menu; launcher không tự nâng quyền toàn bộ tiến trình.
 
 ### Build, kiểm thử và phát hành
 
-- Frontend: `tsc` kiểm kiểu rồi Vite tạo bundle production. Backend: Rust unit tests kiểm parser/hotkey, UTF-8 PowerShell, bộ lọc search và query Everything fallback.
+- Frontend: `tsc` kiểm kiểu rồi Vite tạo bundle production. Backend: Rust unit tests kiểm parser/hotkey, UTF-8 PowerShell, bộ lọc search, query Everything fallback và 7 ca OTP gồm vector RFC 4226/6238, SHA-256/period 60 của Microsoft, HOTP, DPAPI, backup round-trip và quick-add chống trùng.
 - `scripts/capture-readme.ps1` chạy bản release với profile tạm, thao tác launcher thật bằng hotkey, chụp từng tính năng và kiểm tra kích thước/foreground window; lỗi UI trong lúc chụp khiến script dừng.
 - Release Rust bật `panic=abort`, LTO, một codegen unit, `opt-level=s` và strip symbol để giảm dung lượng.
 - GitHub Actions trên `windows-latest` cài Node 20 + Rust stable, cache Cargo, build Tauri/NSIS; push `main` cập nhật nightly, tag `v*` tạo release chính thức.
@@ -282,12 +349,12 @@ Yêu cầu: Node.js, Rust (MSVC), VS Build Tools (C++), WebView2.
 npm run tauri build
 ```
 
-Bộ cài NSIS ở `src-tauri/target/release/bundle/nsis/HeaSpot_*_x64-setup.exe`.
+Bộ cài NSIS ở `src-tauri/target/release/bundle/nsis/HeaSpot_*_x64-setup.exe`; bản hiện tại là `HeaSpot_0.1.15_x64-setup.exe`.
 
-> Khi build: nếu Everything đang chạy và khóa file, tắt nó trước. HeaSpot dùng bản Everything ở `src-tauri/resources/heaspot-everything/` khi đóng gói.
+> Khi build lại trên máy đang chạy HeaSpot, hãy thoát HeaSpot để giải phóng executable/sidecar trong thư mục `target`. Không cần tắt hay gỡ bản Everything riêng của người dùng; tài nguyên đóng gói nằm ở `src-tauri/resources/heaspot-everything/`.
 
 ## CI — tự động release
 
 `.github/workflows/release.yml`:
-- Đẩy tag `v*` (VD `git tag v0.1.3 && git push --tags`) → tạo **release chính thức** kèm bộ cài.
+- Đẩy tag `v*` (VD `git tag v0.1.15 && git push --tags`) → tạo **release chính thức** kèm bộ cài.
 - Push lên `main` → cập nhật bản **nightly** (prerelease) build mới nhất.

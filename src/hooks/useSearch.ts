@@ -68,6 +68,14 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
       return;
     }
 
+    // OTP có màn hình riêng. Không cho secret dán sau keyword đi tiếp tới
+    // web search hoặc bất kỳ provider tìm kiếm nào.
+    if (matchWord(q, kw.otp) !== null) {
+      setResults([]);
+      setEngine("internal");
+      return;
+    }
+
     // ── Prefix triggers ──────────────────────────────────────────────
     if (startsWith(kw.terminal)) {
       const cmd = afterPrefix(kw.terminal);

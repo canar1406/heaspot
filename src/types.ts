@@ -240,4 +240,46 @@ export interface AppSettings {
   launch_at_startup: boolean;
 }
 
+export interface OtpPreview {
+  code: string;
+  remaining: number;
+  expires_at: number;
+  otp_type: "totp" | "hotp";
+  algorithm: "SHA1" | "SHA256" | "SHA512";
+  digits: number;
+  period: number;
+  issuer: string;
+  account_name: string;
+  provider: string;
+}
+
+export interface OtpAccount {
+  id: number;
+  name: string;
+  note: string;
+  issuer: string;
+  provider: string;
+  otp_type: "totp" | "hotp";
+  algorithm: "SHA1" | "SHA256" | "SHA512";
+  digits: number;
+  period: number;
+  pinned: boolean;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  code: string;
+  remaining: number;
+  expires_at: number;
+}
+
+export interface OtpHistoryItem {
+  id: number;
+  account_id: number;
+  account_name: string;
+  code: string;
+  generated_at: number;
+  valid_until: number;
+  copied: boolean;
+}
+
 export type UiMode = "search" | "clipboard";

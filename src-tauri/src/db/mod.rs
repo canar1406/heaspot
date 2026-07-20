@@ -53,6 +53,32 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
             path TEXT PRIMARY KEY,
             launch_count INTEGER NOT NULL DEFAULT 0,
             last_launched TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS otp_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            issuer TEXT NOT NULL DEFAULT '',
+            secret_enc BLOB NOT NULL,
+            otp_type TEXT NOT NULL DEFAULT 'totp',
+            algorithm TEXT NOT NULL DEFAULT 'SHA1',
+            digits INTEGER NOT NULL DEFAULT 6,
+            period INTEGER NOT NULL DEFAULT 30,
+            counter INTEGER NOT NULL DEFAULT 0,
+            is_pinned INTEGER NOT NULL DEFAULT 0,
+            is_archived INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS otp_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            account_name TEXT NOT NULL,
+            code_enc BLOB NOT NULL,
+            generated_at INTEGER NOT NULL,
+            valid_until INTEGER NOT NULL,
+            copied INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(account_id) REFERENCES otp_accounts(id) ON DELETE CASCADE
         );",
     )?;
     // Migration cho bảng clipboard cũ (bỏ qua lỗi nếu cột đã tồn tại)
@@ -74,6 +100,18 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
     );
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_clipboard_content_hash ON clipboard(kind, content_hash)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_otp_accounts_state ON otp_accounts(is_archived, is_pinned DESC, name)",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE otp_accounts ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_otp_history_time ON otp_history(generated_at DESC)",
         [],
     );
     // One-time cleanup for old text/link/file duplicates. Keep the newest row

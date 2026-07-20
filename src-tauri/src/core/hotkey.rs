@@ -192,7 +192,7 @@ fn default_feature_keyword(id: &str) -> &'static str {
         "fulltext" => "in", "translate" => "tr", "wiki" => "wiki", "review" => "review",
         "formula" => "formula", "chemistry" => "chem", "google" => "g", "youtube" => "yt",
         "ocr" => "ocr", "convert" => "conv", "time" => "time", "url" => "url",
-        "password" => "pw", "generator" => "#", "snippet" => ";", "process" => "ps",
+        "password" => "pw", "otp" => "otp", "generator" => "#", "snippet" => ";", "process" => "ps",
         "system" => "sys", "window" => "<", "vscode" => "{", "service" => "!",
         "registry" => ":", "terminal" => ">",
         "port" => "port", "json" => "json", "jwt" => "jwt", "latex" => "latex", _ => "",
@@ -205,7 +205,7 @@ fn activate_feature_hotkey(app: AppHandle, binding: FeatureBinding) {
     let selected = if binding.id == "ocr" { None } else { capture_selected_text() };
     let prefill = if let Some(text) = selected.filter(|s| !s.trim().is_empty()) {
         format!("{} {}", binding.keyword, text.trim())
-    } else if matches!(binding.id.as_str(), "ocr" | "review") {
+    } else if matches!(binding.id.as_str(), "ocr" | "review" | "otp") {
         binding.keyword
     } else {
         format!("{} ", binding.keyword)
