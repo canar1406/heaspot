@@ -13,9 +13,9 @@ jobs:
   release-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -34,9 +34,13 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "HeaSpot v__VERSION__"
-          releaseBody: "Xem ghi chú thay đổi của bản phát hành này."
+          releaseBody: |
+            - Sửa vòng đời focus: đổi cửa sổ và Esc luôn ẩn launcher ổn định.
+            - Gỡ cài đặt trong cửa sổ tiến trình riêng, hỗ trợ 7-Zip/MSI/UWP/portable và dọn dấu vết an toàn.
+            - OTP xếp mới nhất trước, cho phép hiện/copy secret key được DPAPI bảo vệ.
+            - Tích hợp auto-update có chữ ký, thanh tải và release notes.
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
           retryAttempts: 2
