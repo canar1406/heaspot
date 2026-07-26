@@ -58,12 +58,7 @@ pub fn set_capacities_token(
 
 #[tauri::command]
 pub fn capacities_has_token(state: tauri::State<'_, crate::AppState>) -> bool {
-    state
-        .db
-        .lock()
-        .ok()
-        .and_then(|c| read_token(&c))
-        .is_some()
+    state.db.lock().ok().and_then(|c| read_token(&c)).is_some()
 }
 
 #[tauri::command]
@@ -94,7 +89,11 @@ fn capacities_call(token: &str, q: &str) -> Option<Vec<CapacitiesHit>> {
     let bearer = format!("Bearer {token}");
 
     // spaceIds từ cache, nếu chưa có thì gọi GET /spaces một lần
-    let ids: Vec<String> = if let Some(c) = spaces_cache().lock().ok().and_then(|c| c.get(token).cloned()) {
+    let ids: Vec<String> = if let Some(c) = spaces_cache()
+        .lock()
+        .ok()
+        .and_then(|c| c.get(token).cloned())
+    {
         c
     } else {
         let v: serde_json::Value = ureq::get("https://api.capacities.io/spaces")
@@ -133,7 +132,11 @@ fn capacities_call(token: &str, q: &str) -> Option<Vec<CapacitiesHit>> {
         .into_json()
         .ok()?;
 
-    let results = r.get("results").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let results = r
+        .get("results")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     let hits = results
         .into_iter()
         .filter_map(|v| {

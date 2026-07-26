@@ -31,9 +31,7 @@ fn ensure_com() {
 }
 
 unsafe fn extract_png(path: &str) -> Option<Vec<u8>> {
-    use windows_sys::Win32::UI::Shell::{
-        SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
-    };
+    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
     use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -91,7 +89,7 @@ unsafe fn hicon_to_png(
         bi.bmiHeader.biHeight = -h; // top-down
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
-        bi.bmiHeader.biCompression = BI_RGB as u32;
+        bi.bmiHeader.biCompression = BI_RGB;
 
         let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
         let got = GetDIBits(

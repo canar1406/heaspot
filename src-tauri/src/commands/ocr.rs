@@ -12,24 +12,49 @@ fn tesseract_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
         candidates.push(PathBuf::from(path));
     }
     if let Ok(root) = std::env::var("ProgramFiles") {
-        candidates.push(PathBuf::from(root).join("Tesseract-OCR").join("tesseract.exe"));
+        candidates.push(
+            PathBuf::from(root)
+                .join("Tesseract-OCR")
+                .join("tesseract.exe"),
+        );
     }
     if let Ok(root) = std::env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(root).join("Programs").join("Tesseract-OCR").join("tesseract.exe"));
+        candidates.push(
+            PathBuf::from(root)
+                .join("Programs")
+                .join("Tesseract-OCR")
+                .join("tesseract.exe"),
+        );
     }
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn recognize_vietnamese_with_tesseract(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>, String> {
-    let Some(exe) = tesseract_executable(app) else { return Ok(None) };
+fn recognize_vietnamese_with_tesseract(
+    app: &tauri::AppHandle,
+    path: &Path,
+) -> Result<Option<String>, String> {
+    let Some(exe) = tesseract_executable(app) else {
+        return Ok(None);
+    };
     let mut command = std::process::Command::new(exe);
-    command.args([path.as_os_str(), "stdout".as_ref(), "-l".as_ref(), "vie+eng".as_ref(), "--oem".as_ref(), "1".as_ref(), "--psm".as_ref(), "6".as_ref()]);
+    command.args([
+        path.as_os_str(),
+        "stdout".as_ref(),
+        "-l".as_ref(),
+        "vie+eng".as_ref(),
+        "--oem".as_ref(),
+        "1".as_ref(),
+        "--psm".as_ref(),
+        "6".as_ref(),
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let output = command.output().map_err(|e| format!("không chạy được Tesseract OCR: {e}"))?;
+    let output = command
+        .output()
+        .map_err(|e| format!("không chạy được Tesseract OCR: {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "Tesseract OCR tiếng Việt chưa sẵn sàng: {}",
@@ -43,7 +68,9 @@ fn recognize_vietnamese_with_tesseract(app: &tauri::AppHandle, path: &Path) -> R
 /// Mở Windows screen snipping, chờ ảnh mới trong clipboard rồi OCR offline bằng Windows.Media.Ocr.
 #[tauri::command]
 pub async fn capture_ocr(app: tauri::AppHandle) -> Result<String, String> {
-    if let Some(win) = app.get_webview_window("main") { let _ = win.hide(); }
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let before_seq = unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() };
         std::process::Command::new("explorer.exe").arg("ms-screenclip:").spawn()

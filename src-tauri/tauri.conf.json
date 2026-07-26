@@ -43,14 +43,56 @@
         "skipTaskbar": false,
         "center": true,
         "visible": false
+      },
+      {
+        "label": "uninstall-progress",
+        "title": "HeaSpot — Tiến trình gỡ cài đặt",
+        "width": 480,
+        "height": 270,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "center": false,
+        "visible": false,
+        "shadow": true
+      },
+      {
+        "label": "update-progress",
+        "title": "HeaSpot — Cập nhật",
+        "width": 500,
+        "height": 320,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "center": true,
+        "visible": false,
+        "shadow": true
       }
     ],
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "resources": {
       "resources/heaspot-everything/": "everything/",

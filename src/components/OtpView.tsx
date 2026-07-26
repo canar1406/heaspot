@@ -19,7 +19,6 @@ interface Props {
   quickSubmitToken?: number;
   onConsumeInput?: () => void;
   onQuickComplete?: () => void;
-  onFocusSearch: () => void;
 }
 
 interface QuickAddResult {
@@ -51,6 +50,10 @@ function storedDate(value: string) {
     month: "2-digit",
     year: "numeric",
   });
+}
+
+function displaySecret(secret: string) {
+  return secret.match(/.{1,4}/g)?.join(" ") ?? secret;
 }
 
 function IconButton({
@@ -90,7 +93,6 @@ export function OtpView({
   quickSubmitToken = 0,
   onConsumeInput,
   onQuickComplete,
-  onFocusSearch,
 }: Props) {
   const [tab, setTab] = useState<Tab>("active");
   const [accounts, setAccounts] = useState<OtpAccount[]>([]);
@@ -104,6 +106,9 @@ export function OtpView({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copiedId, setCopiedId] = useState<number>();
+  const [secretCopiedId, setSecretCopiedId] = useState<number>();
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<number, string>>({});
+  const [secretBusyId, setSecretBusyId] = useState<number>();
   const [editingId, setEditingId] = useState<number>();
   const [editName, setEditName] = useState("");
   const [editNote, setEditNote] = useState("");
@@ -232,6 +237,42 @@ export function OtpView({
     }
   };
 
+  const toggleSecret = async (account: OtpAccount) => {
+    if (revealedSecrets[account.id] !== undefined) {
+      setRevealedSecrets((current) => {
+        const next = { ...current };
+        delete next[account.id];
+        return next;
+      });
+      return;
+    }
+    if (secretBusyId === account.id) return;
+    setSecretBusyId(account.id);
+    setError("");
+    try {
+      const value = await invoke<string>("get_otp_secret", { id: account.id });
+      setRevealedSecrets((current) => ({ ...current, [account.id]: value }));
+    } catch (value) {
+      setError(String(value));
+    } finally {
+      setSecretBusyId(undefined);
+    }
+  };
+
+  const copyStoredSecret = async (account: OtpAccount) => {
+    setError("");
+    try {
+      await invoke("copy_otp_secret", { id: account.id });
+      setSecretCopiedId(account.id);
+      window.setTimeout(
+        () => setSecretCopiedId((id) => id === account.id ? undefined : id),
+        1300,
+      );
+    } catch (value) {
+      setError(String(value));
+    }
+  };
+
   const rename = async (id: number) => {
     if (!editName.trim()) return;
     await invoke("rename_otp_account", { id, name: editName, note: editNote });
@@ -246,6 +287,11 @@ export function OtpView({
 
   const archive = async (id: number, archived: boolean) => {
     await invoke("set_otp_archived", { id, archived });
+    setRevealedSecrets((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     await loadAccounts(tab === "archived");
   };
 
@@ -256,6 +302,11 @@ export function OtpView({
       return;
     }
     await invoke("delete_otp_account", { id });
+    setRevealedSecrets((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setDeleteId(undefined);
     await loadAccounts(tab === "archived");
   };
@@ -316,15 +367,7 @@ export function OtpView({
   };
 
   return (
-    <div
-      className="relative flex min-h-0 flex-1 flex-col border-t border-black/5 dark:border-white/10"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.stopPropagation();
-          onFocusSearch();
-        }
-      }}
-    >
+    <div className="relative flex min-h-0 flex-1 flex-col border-t border-black/5 dark:border-white/10">
       <div className="flex h-12 shrink-0 items-center justify-between px-4">
         <div className="flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.06]">
           {(["active", "archived", "history"] as const).map((value) => (
@@ -503,12 +546,25 @@ export function OtpView({
                     {account.otp_type === "totp" ? `${account.remaining}s` : "HOTP"}
                   </div>
                   <div className="flex gap-1">
-                    <IconButton title={account.pinned ? "Bỏ ghim" : "Ghim lên đầu"} active={account.pinned} onClick={() => void togglePin(account.id)}>◆</IconButton>
+                    <IconButton title={account.pinned ? "Bỏ ghim" : "Ghim tài khoản"} active={account.pinned} onClick={() => void togglePin(account.id)}>◆</IconButton>
+                    <IconButton title={revealedSecrets[account.id] !== undefined ? "Ẩn secret key" : "Hiện secret key"} active={revealedSecrets[account.id] !== undefined} onClick={() => void toggleSecret(account)}>{secretBusyId === account.id ? "…" : "S"}</IconButton>
+                    <IconButton title="Copy secret key" active={secretCopiedId === account.id} onClick={() => void copyStoredSecret(account)}>{secretCopiedId === account.id ? "✓" : "⧉"}</IconButton>
                     <IconButton title="Sửa tên và chú thích" onClick={() => { setEditingId(account.id); setEditName(account.name); setEditNote(account.note); }}>✎</IconButton>
                     <IconButton title={account.archived ? "Khôi phục" : "Lưu trữ"} onClick={() => void archive(account.id, !account.archived)}>{account.archived ? "↥" : "⌑"}</IconButton>
                     <IconButton title={deleteId === account.id ? "Bấm lần nữa để xoá vĩnh viễn" : "Xoá"} danger={deleteId === account.id} onClick={() => void remove(account.id)}>{deleteId === account.id ? "!" : "×"}</IconButton>
                   </div>
                 </div>
+                {revealedSecrets[account.id] !== undefined && (
+                  <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2">
+                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Secret key</span>
+                    <code className="min-w-0 flex-1 select-all break-all font-mono text-[11.5px] text-zinc-700 dark:text-zinc-200">
+                      {displaySecret(revealedSecrets[account.id])}
+                    </code>
+                    <button type="button" onClick={() => void copyStoredSecret(account)} className="shrink-0 rounded-md bg-amber-500/10 px-2 py-1 text-[10.5px] font-semibold text-amber-700 hover:bg-amber-500/20 dark:text-amber-300">
+                      {secretCopiedId === account.id ? "Đã copy" : "Copy secret"}
+                    </button>
+                  </div>
+                )}
                 <div className="h-0.5 bg-black/[0.04] dark:bg-white/[0.04]"><div className={`h-full transition-[width] duration-500 ${urgent ? "bg-amber-500" : "bg-blue-500"}`} style={{ width: `${progress}%` }} /></div>
               </div>
             );
@@ -518,7 +574,7 @@ export function OtpView({
 
       <div className="flex shrink-0 items-center justify-between border-t border-black/5 px-4 py-2 text-[10.5px] text-zinc-400 dark:border-white/10">
         <span>Lưu cả secret gốc · Microsoft OATH‑TOTP tương thích; push/number matching vẫn cần Microsoft Authenticator.</span>
-        <span>Click mã để copy · Secret không vào clipboard history</span>
+        <span>S hiện/ẩn · ⧉ copy secret · Secret không vào clipboard history</span>
       </div>
 
       {backup && (

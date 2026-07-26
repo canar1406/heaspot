@@ -19,9 +19,12 @@ const DEFAULTS: AppSettings = {
   password_to_history: false,
   theme: "system",
   launch_at_startup: false,
+  auto_update: true,
+  update_endpoint: "",
+  update_pubkey: "",
 };
 
-type Tab = "general" | "keywords" | "clipboard";
+type Tab = "general" | "keywords" | "clipboard" | "updates";
 
 const GROUPS = ["Tìm kiếm & tri thức", "Tiện ích", "Hệ thống & điều hướng"] as const;
 
@@ -128,6 +131,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
             ["general", "Chung"],
             ["keywords", "Keyword & Hotkey tính năng"],
             ["clipboard", "Clipboard & Bảo mật"],
+            ["updates", "Cập nhật"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -338,6 +342,51 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                   <input type="checkbox" checked={value.password_to_history} onChange={(e) => setValue({ ...value, password_to_history: e.target.checked })} />
                   Khi copy mật khẩu thì <b className="mx-1">lưu</b> vào clipboard history (mặc định KHÔNG lưu cho an toàn)
                 </label>
+              </Section>
+            </>
+          )}
+
+          {tab === "updates" && (
+            <>
+              <Section title="Auto-update có chữ ký">
+                <div className="rounded-lg border border-blue-500/25 bg-blue-500/10 p-3 text-[11.5px] leading-relaxed text-blue-700 dark:text-blue-300">
+                  HeaSpot chỉ cài gói cập nhật vượt qua chữ ký Tauri. Public key có thể chia sẻ;
+                  private key phát hành tuyệt đối không được nhập hoặc lưu trong ứng dụng.
+                </div>
+                <label className="flex items-center gap-3 text-[13px]">
+                  <input type="checkbox" checked={value.auto_update}
+                    onChange={(e) => setValue({ ...value, auto_update: e.target.checked })} />
+                  Tự kiểm tra cập nhật khi HeaSpot khởi động
+                </label>
+                <label className="block">
+                  <span className="block text-[12px] font-medium mb-1.5">Endpoint HTTPS (`latest.json`)</span>
+                  <input className={field} type="url" placeholder="https://github.com/owner/heaspot/releases/latest/download/latest.json"
+                    value={value.update_endpoint}
+                    onChange={(e) => setValue({ ...value, update_endpoint: e.target.value.trim() })} />
+                </label>
+                <label className="block">
+                  <span className="block text-[12px] font-medium mb-1.5">Tauri updater public key</span>
+                  <textarea className={`${field} h-24 resize-none font-mono`} placeholder="dW50cnVzdGVkIGNvbW1lbnQ6…"
+                    value={value.update_pubkey}
+                    onChange={(e) => setValue({ ...value, update_pubkey: e.target.value.trim() })} />
+                </label>
+                <button
+                  type="button"
+                  disabled={!value.update_endpoint || !value.update_pubkey}
+                  onClick={async () => {
+                    setStatus("Đang kiểm tra cập nhật…");
+                    try {
+                      await invoke("save_settings", { settings: { ...value, keywords: JSON.stringify(kw), feature_hotkeys: JSON.stringify(featureHotkeys) } });
+                      const result = await invoke<string>("check_for_updates", { manual: true });
+                      setStatus(result);
+                    } catch (e) {
+                      setStatus(String(e));
+                    }
+                  }}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40"
+                >
+                  Kiểm tra cập nhật ngay
+                </button>
               </Section>
             </>
           )}

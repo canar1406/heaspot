@@ -130,7 +130,7 @@ pub fn open_conn() -> rusqlite::Result<Connection> {
                SELECT MAX(id) FROM clipboard
                WHERE kind IN ('text','link','files')
                GROUP BY kind, content
-             );"
+             );",
     );
     Ok(conn)
 }

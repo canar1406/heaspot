@@ -181,18 +181,23 @@ pub fn install_workflow(path: String) -> Result<String, String> {
     let _ = std::fs::create_dir_all(&dest);
 
     let file = std::fs::File::open(&src).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("không phải file ZIP hợp lệ: {e}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("không phải file ZIP hợp lệ: {e}"))?;
     zip.extract(&dest).map_err(|e| e.to_string())?;
 
-    let wf = parse_workflow(&dest)
-        .ok_or("không tìm thấy Script Filter có keyword trong info.plist (workflow này chưa được hỗ trợ)")?;
+    let wf = parse_workflow(&dest).ok_or(
+        "không tìm thấy Script Filter có keyword trong info.plist (workflow này chưa được hỗ trợ)",
+    )?;
     if wf.script_type == "unsupported" {
         return Err(format!(
             "workflow \"{}\" dùng AppleScript/định dạng chỉ có trên macOS — không hỗ trợ",
             wf.name
         ));
     }
-    let msg = format!("Đã cài \"{}\" — gõ `{} <từ khoá>` để dùng", wf.name, wf.keyword);
+    let msg = format!(
+        "Đã cài \"{}\" — gõ `{} <từ khoá>` để dùng",
+        wf.name, wf.keyword
+    );
     rescan_workflows();
     Ok(msg)
 }
@@ -215,8 +220,9 @@ pub async fn run_workflow(keyword: String, query: String) -> Result<Vec<Workflow
         .map_err(|e| e.to_string())??;
 
     // Alfred Script Filter JSON: { "items": [ { title, subtitle, arg } ] }
-    let v: serde_json::Value = serde_json::from_str(output.trim())
-        .map_err(|_| "script không trả về JSON chuẩn Alfred (có thể là workflow XML cũ)".to_string())?;
+    let v: serde_json::Value = serde_json::from_str(output.trim()).map_err(|_| {
+        "script không trả về JSON chuẩn Alfred (có thể là workflow XML cũ)".to_string()
+    })?;
     let items = v
         .get("items")
         .and_then(|i| i.as_array())
@@ -241,7 +247,11 @@ pub async fn run_workflow(keyword: String, query: String) -> Result<Vec<Workflow
                     .join(" "),
                 _ => String::new(),
             };
-            Some(WorkflowItem { title, subtitle, arg })
+            Some(WorkflowItem {
+                title,
+                subtitle,
+                arg,
+            })
         })
         .take(15)
         .collect())

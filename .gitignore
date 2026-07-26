@@ -1,6 +1,11 @@
-node_modules
-dist
-src-tauri/target
-src-tauri/resources/heaspot-ocr
+# Never commit updater private keys or passwords.
+*.key
+*.key.pub
+.env
+
+node_modules/
+dist/
+src-tauri/target/
+.tooling/
 *.local
 .DS_Store

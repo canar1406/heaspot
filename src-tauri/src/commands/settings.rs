@@ -26,11 +26,20 @@ pub struct Settings {
     // Chung
     pub theme: String, // "system" | "light" | "dark"
     pub launch_at_startup: bool,
+    // Kênh cập nhật có chữ ký. Endpoint/public key có thể cấu hình mà
+    // không cần build lại app khi chuyển repo hoặc xoay khóa.
+    pub auto_update: bool,
+    pub update_endpoint: String,
+    pub update_pubkey: String,
 }
 
 fn value(conn: &rusqlite::Connection, key: &str, default: &str) -> String {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0))
-        .unwrap_or_else(|_| default.to_string())
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .unwrap_or_else(|_| default.to_string())
 }
 
 pub fn load(conn: &rusqlite::Connection) -> Settings {
@@ -39,15 +48,28 @@ pub fn load(conn: &rusqlite::Connection) -> Settings {
         clipboard_hotkey: value(conn, "clipboard_hotkey", "Win+V"),
         keywords: value(conn, "keywords", "{}"),
         feature_hotkeys: value(conn, "feature_hotkeys", "{}"),
-        max_clipboard_items: value(conn, "max_clipboard_items", "500").parse().unwrap_or(500).clamp(50, 2000),
-        clipboard_retention_days: value(conn, "clipboard_retention_days", "0").parse().unwrap_or(0).min(3650),
-        privacy_apps: value(conn, "privacy_apps", "keepass,bitwarden,1password,lastpass,dashlane,protonpass"),
+        max_clipboard_items: value(conn, "max_clipboard_items", "500")
+            .parse()
+            .unwrap_or(500)
+            .clamp(50, 2000),
+        clipboard_retention_days: value(conn, "clipboard_retention_days", "0")
+            .parse()
+            .unwrap_or(0)
+            .min(3650),
+        privacy_apps: value(
+            conn,
+            "privacy_apps",
+            "keepass,bitwarden,1password,lastpass,dashlane,protonpass",
+        ),
         auto_paste: value(conn, "auto_paste", "true") == "true",
         serper_api_key: value(conn, "serper_api_key", ""),
         enable_browser_passwords: value(conn, "enable_browser_passwords", "false") == "true",
         password_to_history: value(conn, "password_to_history", "false") == "true",
         theme: value(conn, "theme", "system"),
         launch_at_startup: value(conn, "launch_at_startup", "false") == "true",
+        auto_update: value(conn, "auto_update", "true") == "true",
+        update_endpoint: value(conn, "update_endpoint", ""),
+        update_pubkey: value(conn, "update_pubkey", ""),
     }
 }
 
@@ -65,6 +87,11 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
     if settings.clipboard_retention_days > 3650 {
         return Err("Thời gian lưu clipboard tối đa là 3650 ngày".into());
     }
+    validate_update_config(
+        settings.auto_update,
+        &settings.update_endpoint,
+        &settings.update_pubkey,
+    )?;
     crate::core::hotkey::apply_hotkeys(
         &app,
         &settings.search_hotkey,
@@ -81,15 +108,30 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
         ("clipboard_hotkey", settings.clipboard_hotkey.clone()),
         ("keywords", settings.keywords.clone()),
         ("feature_hotkeys", settings.feature_hotkeys.clone()),
-        ("max_clipboard_items", settings.max_clipboard_items.to_string()),
-        ("clipboard_retention_days", settings.clipboard_retention_days.to_string()),
+        (
+            "max_clipboard_items",
+            settings.max_clipboard_items.to_string(),
+        ),
+        (
+            "clipboard_retention_days",
+            settings.clipboard_retention_days.to_string(),
+        ),
         ("privacy_apps", settings.privacy_apps.clone()),
         ("auto_paste", settings.auto_paste.to_string()),
         ("serper_api_key", settings.serper_api_key.clone()),
-        ("enable_browser_passwords", settings.enable_browser_passwords.to_string()),
-        ("password_to_history", settings.password_to_history.to_string()),
+        (
+            "enable_browser_passwords",
+            settings.enable_browser_passwords.to_string(),
+        ),
+        (
+            "password_to_history",
+            settings.password_to_history.to_string(),
+        ),
         ("theme", settings.theme.clone()),
         ("launch_at_startup", settings.launch_at_startup.to_string()),
+        ("auto_update", settings.auto_update.to_string()),
+        ("update_endpoint", settings.update_endpoint.clone()),
+        ("update_pubkey", settings.update_pubkey.clone()),
     ] {
         conn.execute(
             "INSERT INTO settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -103,6 +145,16 @@ pub fn save_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
+fn validate_update_config(enabled: bool, endpoint: &str, public_key: &str) -> Result<(), String> {
+    if !endpoint.is_empty() && !endpoint.starts_with("https://") {
+        return Err("Endpoint cập nhật production phải dùng HTTPS".into());
+    }
+    if enabled && (endpoint.is_empty() != public_key.is_empty()) {
+        return Err("Auto-update cần đủ cả endpoint và public key, hoặc để trống cả hai".into());
+    }
+    Ok(())
+}
+
 fn set_startup(enabled: bool) -> Result<(), String> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -112,12 +164,29 @@ fn set_startup(enabled: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     if enabled {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        key.set_value("HeaSpot", &format!("\"{}\"", exe.display())).map_err(|e| e.to_string())
+        key.set_value("HeaSpot", &format!("\"{}\"", exe.display()))
+            .map_err(|e| e.to_string())
     } else {
         match key.delete_value("HeaSpot") {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_update_config;
+
+    #[test]
+    fn updater_requires_https_and_a_complete_key_pair() {
+        assert!(validate_update_config(true, "", "").is_ok());
+        assert!(
+            validate_update_config(true, "https://example.test/latest.json", "public-key").is_ok()
+        );
+        assert!(validate_update_config(true, "http://example.test/latest.json", "key").is_err());
+        assert!(validate_update_config(true, "https://example.test/latest.json", "").is_err());
+        assert!(validate_update_config(true, "", "public-key").is_err());
     }
 }

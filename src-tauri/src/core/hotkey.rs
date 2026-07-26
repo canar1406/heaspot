@@ -52,7 +52,9 @@ fn feature_bindings() -> &'static RwLock<Vec<FeatureBinding>> {
 
 fn shortcut_for(value: &str) -> Option<Shortcut> {
     // "Win+V" và "Win" (đơn) bắt bằng low-level hook, không đăng ký global shortcut.
-    if value.eq_ignore_ascii_case("Win+V") || value.eq_ignore_ascii_case("Win") { return None; }
+    if value.eq_ignore_ascii_case("Win+V") || value.eq_ignore_ascii_case("Win") {
+        return None;
+    }
     // HotkeyCapture (UI) xuất "Win" cho phím Windows; parser global-shortcut cần "Super".
     let normalized = if value.len() >= 4 && value[..4].eq_ignore_ascii_case("Win+") {
         format!("Super+{}", &value[4..])
@@ -71,14 +73,22 @@ pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            let current = config().read().ok().map(|c| c.clone()).unwrap_or_else(|| ("Alt+Space".into(), "Win+V".into()));
+            let current = config()
+                .read()
+                .ok()
+                .map(|c| c.clone())
+                .unwrap_or_else(|| ("Alt+Space".into(), "Win+V".into()));
             if shortcut_for(&current.0).as_ref() == Some(shortcut) {
                 crate::core::window::toggle(app, "search");
             } else if shortcut_for(&current.1).as_ref() == Some(shortcut) {
                 crate::core::window::toggle(app, "clipboard");
             } else {
-                let binding = feature_bindings().read().ok()
-                    .and_then(|items| items.iter().find(|b| shortcut_for(&b.hotkey).as_ref() == Some(shortcut)).cloned());
+                let binding = feature_bindings().read().ok().and_then(|items| {
+                    items
+                        .iter()
+                        .find(|b| shortcut_for(&b.hotkey).as_ref() == Some(shortcut))
+                        .cloned()
+                });
                 if let Some(binding) = binding {
                     let app = app.clone();
                     std::thread::spawn(move || activate_feature_hotkey(app, binding));
@@ -94,7 +104,10 @@ pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 pub fn register_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let settings = {
         let state = app.state::<crate::AppState>();
-        let conn = state.db.lock().map_err(|e| std::io::Error::other(e.to_string()))?;
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         crate::commands::settings::load(&conn)
     };
     apply_hotkeys(
@@ -104,7 +117,7 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         &settings.feature_hotkeys,
         &settings.keywords,
     )
-        .map_err(|e| std::io::Error::other(e).into())
+    .map_err(|e| std::io::Error::other(e).into())
 }
 
 /// Tạm ngưng MỌI hotkey (global shortcut + low-level hook) trong lúc UI đang
@@ -149,14 +162,18 @@ pub fn apply_hotkeys(
     } else {
         Some(shortcut_for(search).ok_or("Hotkey launcher không hợp lệ")?)
     };
-    if clipboard != "Win+V" && shortcut_for(clipboard).is_none() { return Err("Hotkey clipboard không hợp lệ".into()); }
+    if clipboard != "Win+V" && shortcut_for(clipboard).is_none() {
+        return Err("Hotkey clipboard không hợp lệ".into());
+    }
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;
     if let Some(sc) = search_shortcut {
         if let Err(e) = gs.register(sc) {
             if search == "Alt+Space" {
                 ALT_SPACE_VIA_HOOK.store(true, Ordering::Relaxed);
-            } else { return Err(format!("Hotkey launcher đang bị ứng dụng khác chiếm: {e}")); }
+            } else {
+                return Err(format!("Hotkey launcher đang bị ứng dụng khác chiếm: {e}"));
+            }
         } else {
             ALT_SPACE_VIA_HOOK.store(false, Ordering::Relaxed);
         }
@@ -167,42 +184,85 @@ pub fn apply_hotkeys(
     // Chỉ đăng ký ĐÚNG phím clipboard người dùng đặt — không có phím dự phòng.
     // (Win+V dùng low-level hook riêng, không cần register global shortcut.)
     if let Some(sc) = shortcut_for(clipboard) {
-        gs.register(sc).map_err(|e| format!("Hotkey clipboard đang bị chiếm: {e}"))?;
+        gs.register(sc)
+            .map_err(|e| format!("Hotkey clipboard đang bị chiếm: {e}"))?;
     }
-    let feature_hotkeys: HashMap<String, String> = serde_json::from_str(feature_hotkeys_json).unwrap_or_default();
-    let keyword_overrides: HashMap<String, String> = serde_json::from_str(keywords_json).unwrap_or_default();
+    let feature_hotkeys: HashMap<String, String> =
+        serde_json::from_str(feature_hotkeys_json).unwrap_or_default();
+    let keyword_overrides: HashMap<String, String> =
+        serde_json::from_str(keywords_json).unwrap_or_default();
     let mut bindings = Vec::new();
     for (id, hotkey) in feature_hotkeys {
         let hotkey = hotkey.trim().to_string();
-        if hotkey.is_empty() { continue; }
-        let shortcut = shortcut_for(&hotkey).ok_or_else(|| format!("Hotkey tính năng {id} không hợp lệ: {hotkey}"))?;
-        gs.register(shortcut).map_err(|e| format!("Hotkey {hotkey} của {id} đang bị chiếm hoặc bị trùng: {e}"))?;
-        let keyword = keyword_overrides.get(&id).cloned().filter(|s| !s.trim().is_empty())
+        if hotkey.is_empty() {
+            continue;
+        }
+        let shortcut = shortcut_for(&hotkey)
+            .ok_or_else(|| format!("Hotkey tính năng {id} không hợp lệ: {hotkey}"))?;
+        gs.register(shortcut)
+            .map_err(|e| format!("Hotkey {hotkey} của {id} đang bị chiếm hoặc bị trùng: {e}"))?;
+        let keyword = keyword_overrides
+            .get(&id)
+            .cloned()
+            .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| default_feature_keyword(&id).to_string());
-        bindings.push(FeatureBinding { id, hotkey, keyword });
+        bindings.push(FeatureBinding {
+            id,
+            hotkey,
+            keyword,
+        });
     }
     WIN_V_ENABLED.store(clipboard == "Win+V", Ordering::Relaxed);
-    if let Ok(mut c) = config().write() { *c = (search.to_string(), clipboard.to_string()); }
-    if let Ok(mut items) = feature_bindings().write() { *items = bindings; }
+    if let Ok(mut c) = config().write() {
+        *c = (search.to_string(), clipboard.to_string());
+    }
+    if let Ok(mut items) = feature_bindings().write() {
+        *items = bindings;
+    }
     Ok(())
 }
 
 fn default_feature_keyword(id: &str) -> &'static str {
     match id {
-        "fulltext" => "in", "translate" => "tr", "wiki" => "wiki", "review" => "review",
-        "formula" => "formula", "chemistry" => "chem", "google" => "g", "youtube" => "yt",
-        "ocr" => "ocr", "convert" => "conv", "time" => "time", "url" => "url",
-        "password" => "pw", "otp" => "otp", "generator" => "#", "snippet" => ";", "process" => "ps",
-        "system" => "sys", "window" => "<", "vscode" => "{", "service" => "!",
-        "registry" => ":", "terminal" => ">",
-        "port" => "port", "json" => "json", "jwt" => "jwt", "latex" => "latex", _ => "",
+        "fulltext" => "in",
+        "translate" => "tr",
+        "wiki" => "wiki",
+        "review" => "review",
+        "formula" => "formula",
+        "chemistry" => "chem",
+        "google" => "g",
+        "youtube" => "yt",
+        "ocr" => "ocr",
+        "convert" => "conv",
+        "time" => "time",
+        "url" => "url",
+        "password" => "pw",
+        "otp" => "otp",
+        "generator" => "#",
+        "snippet" => ";",
+        "process" => "ps",
+        "system" => "sys",
+        "window" => "<",
+        "vscode" => "{",
+        "service" => "!",
+        "registry" => ":",
+        "terminal" => ">",
+        "port" => "port",
+        "json" => "json",
+        "jwt" => "jwt",
+        "latex" => "latex",
+        _ => "",
     }
 }
 
 fn activate_feature_hotkey(app: AppHandle, binding: FeatureBinding) {
     // Đợi người dùng nhả tổ hợp Alt/Ctrl/Shift rồi mới gửi Ctrl+C.
     std::thread::sleep(std::time::Duration::from_millis(120));
-    let selected = if binding.id == "ocr" { None } else { capture_selected_text() };
+    let selected = if binding.id == "ocr" {
+        None
+    } else {
+        capture_selected_text()
+    };
     let prefill = if let Some(text) = selected.filter(|s| !s.trim().is_empty()) {
         format!("{} {}", binding.keyword, text.trim())
     } else if matches!(binding.id.as_str(), "ocr" | "review" | "otp") {
@@ -218,10 +278,20 @@ fn capture_selected_text() -> Option<String> {
     let mut clipboard = arboard::Clipboard::new().ok()?;
     let saved_text = clipboard.get_text().ok();
     let saved_image = if saved_text.is_none() {
-        clipboard.get_image().ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
-    } else { None };
-    let sentinel = format!("__HEASPOT_SELECTION_{}__", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos());
+        clipboard
+            .get_image()
+            .ok()
+            .map(|img| (img.width, img.height, img.bytes.into_owned()))
+    } else {
+        None
+    };
+    let sentinel = format!(
+        "__HEASPOT_SELECTION_{}__",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos()
+    );
     clipboard.set_text(sentinel.clone()).ok()?;
 
     unsafe {
@@ -249,7 +319,9 @@ fn capture_selected_text() -> Option<String> {
         let _ = clipboard.set_text(text);
     } else if let Some((width, height, bytes)) = saved_image {
         let _ = clipboard.set_image(arboard::ImageData {
-            width, height, bytes: std::borrow::Cow::Owned(bytes),
+            width,
+            height,
+            bytes: std::borrow::Cow::Owned(bytes),
         });
     } else {
         let _ = clipboard.set_text(String::new());
@@ -268,11 +340,16 @@ static APP: OnceLock<AppHandle> = OnceLock::new();
 pub fn install_winv_hook(app: AppHandle) {
     let _ = APP.set(app);
     std::thread::spawn(|| unsafe {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, MSG,
-            WH_KEYBOARD_LL,
+            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, MSG, WH_KEYBOARD_LL,
         };
-        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(winv_proc), std::ptr::null_mut(), 0);
+        // A global low-level hook lives inside this executable. Passing the
+        // process module explicitly is required for reliable release builds;
+        // a null module handle can appear to work in debug but fail silently
+        // once the binary is optimized/stripped.
+        let module = GetModuleHandleW(std::ptr::null());
+        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(winv_proc), module, 0);
         if hook.is_null() {
             eprintln!("không cài được keyboard hook cho Win+V");
             return;
@@ -358,6 +435,7 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
 
     const VK_V: u32 = 0x56;
     const VK_SPACE_CODE: u32 = 0x20;
+    const VK_ESCAPE_CODE: u32 = 0x1B;
 
     if code == HC_ACTION as i32 {
         let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
@@ -399,6 +477,20 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
             return 1; // nuốt cả down/up -> focus tuyệt đối khi ghi
         }
 
+        // Native Escape fallback for the launcher. WebView key events can be
+        // missed while focus is crossing the transparent, borderless window;
+        // the low-level hook already has the real foreground HWND, so hide the
+        // main window here and do not affect Settings/native dialogs.
+        if is_down && kb.vkCode == VK_ESCAPE_CODE {
+            if let Some(app) = APP
+                .get()
+                .filter(|app| crate::core::window::main_is_foreground(app))
+            {
+                crate::core::window::hide_main(app);
+                return 1;
+            }
+        }
+
         // === Phím WIN ĐƠN -> Launcher (thay Start menu, kiểu PowerToys) ===
         // Cho Win-down/up đi qua để Win+X vẫn chạy; chỉ khi "gõ Win rồi nhả mà
         // KHÔNG bấm phím nào khác" thì mở launcher + chèn 0xFF để chặn Start menu.
@@ -413,12 +505,17 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
                         && !WIN_OTHER_KEY.load(Ordering::Relaxed);
                     WIN_KEY_DOWN.store(false, Ordering::Relaxed);
                     if lone {
-                        // Win còn "đang giữ" -> chèn 0xFF để Windows coi là Win+X -> KHÔNG mở Start
+                        // Biến chuỗi thành Win+0xFF để Shell không mở Start,
+                        // gửi một Win-up thay thế rồi nuốt Win-up vật lý. Nếu
+                        // thả sự kiện gốc xuống Shell, Start đôi lúc giành lại
+                        // foreground ngay sau khi launcher vừa hiện.
                         keybd_event(0xFF, 0, 0, 0);
                         keybd_event(0xFF, 0, KEYEVENTF_KEYUP, 0);
+                        keybd_event(kb.vkCode as u8, 0, KEYEVENTF_KEYUP, 0);
                         if let Some(app) = APP.get() {
                             crate::core::window::toggle(app, "search");
                         }
+                        return 1;
                     }
                 }
             } else if is_down && WIN_KEY_DOWN.load(Ordering::Relaxed) {
@@ -444,13 +541,9 @@ unsafe extern "system" fn winv_proc(code: i32, wparam: usize, lparam: isize) -> 
         }
 
         // Alt+Space -> Search (chỉ khi RegisterHotKey thất bại vì app khác chiếm)
-        if is_down
-            && kb.vkCode == VK_SPACE_CODE
-            && ALT_SPACE_VIA_HOOK.load(Ordering::Relaxed)
-        {
+        if is_down && kb.vkCode == VK_SPACE_CODE && ALT_SPACE_VIA_HOOK.load(Ordering::Relaxed) {
             let alt_held = held(VK_MENU);
-            let other_mod =
-                held(VK_CONTROL) || held(VK_SHIFT) || held(VK_LWIN) || held(VK_RWIN);
+            let other_mod = held(VK_CONTROL) || held(VK_SHIFT) || held(VK_LWIN) || held(VK_RWIN);
             if alt_held && !other_mod {
                 if let Some(app) = APP.get() {
                     crate::core::window::toggle(app, "search");

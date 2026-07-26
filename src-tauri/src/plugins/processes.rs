@@ -43,11 +43,16 @@ pub fn list_processes(query: String) -> Vec<ProcInfo> {
                 };
                 let name_l = name.to_lowercase();
                 if q.is_empty() || name_l.contains(&q) || pid.to_string().contains(&q) {
-                    let exe = crate::plugins::window_walker::process_path_of(pid).unwrap_or_default();
+                    let exe =
+                        crate::plugins::window_walker::process_path_of(pid).unwrap_or_default();
                     out.push(ProcInfo {
                         pid,
                         mem_mb: process_mem_mb(pid),
-                        icon: if exe.is_empty() { None } else { crate::core::indexer::icon_for(&exe) },
+                        icon: if exe.is_empty() {
+                            None
+                        } else {
+                            crate::core::indexer::icon_for(&exe)
+                        },
                         exe,
                         name,
                     });
@@ -58,7 +63,11 @@ pub fn list_processes(query: String) -> Vec<ProcInfo> {
         windows_sys::Win32::Foundation::CloseHandle(snap);
     }
 
-    out.sort_by(|a, b| b.mem_mb.partial_cmp(&a.mem_mb).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.mem_mb
+            .partial_cmp(&a.mem_mb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.truncate(160);
     out
 }
@@ -97,7 +106,9 @@ pub fn list_port(port: String) -> Vec<ProcInfo> {
         if !matches {
             continue;
         }
-        let Ok(pid) = cols[4].parse::<u32>() else { continue };
+        let Ok(pid) = cols[4].parse::<u32>() else {
+            continue;
+        };
         if pid == 0 || !seen.insert(pid) {
             continue;
         }
@@ -115,7 +126,11 @@ pub fn list_port(port: String) -> Vec<ProcInfo> {
             ProcInfo {
                 pid,
                 mem_mb: process_mem_mb(pid),
-                icon: if exe.is_empty() { None } else { crate::core::indexer::icon_for(&exe) },
+                icon: if exe.is_empty() {
+                    None
+                } else {
+                    crate::core::indexer::icon_for(&exe)
+                },
                 exe,
                 name: format!("{name}  ·  {addr}"),
             }
@@ -164,7 +179,10 @@ unsafe fn enable_debug_privilege() {
     {
         return;
     }
-    let name: Vec<u16> = "SeDebugPrivilege".encode_utf16().chain(std::iter::once(0)).collect();
+    let name: Vec<u16> = "SeDebugPrivilege"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let mut luid: LUID = std::mem::zeroed();
     if LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) != 0 {
         let tp = TOKEN_PRIVILEGES {
@@ -199,7 +217,10 @@ pub fn kill_process(pid: u32, tree: Option<bool>) -> Result<(), String> {
         "taskkill.exe",
         Some(&format!("/F {} /PID {pid}", if tree { "/T" } else { "" })),
     )
-    .map_err(|_| "không thể kết thúc tiến trình này (có thể là tiến trình được bảo vệ của hệ thống)".to_string())
+    .map_err(|_| {
+        "không thể kết thúc tiến trình này (có thể là tiến trình được bảo vệ của hệ thống)"
+            .to_string()
+    })
 }
 
 unsafe fn terminate_direct(pid: u32) -> bool {

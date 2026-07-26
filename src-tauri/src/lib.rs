@@ -4,6 +4,7 @@ mod db;
 mod plugins;
 
 use std::sync::{Mutex, RwLock};
+use tauri::Manager;
 
 /// State toàn cục chia sẻ giữa các command
 pub struct AppState {
@@ -22,6 +23,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(crate::core::hotkey::build_plugin())
         .manage(state)
@@ -30,6 +32,8 @@ pub fn run() {
             crate::core::window::setup_tray(app)?;
             crate::core::hotkey::register_shortcuts(app.handle())?;
             crate::core::hotkey::install_winv_hook(app.handle().clone());
+            crate::core::window::spawn_focus_watchdog(app.handle().clone());
+            commands::updater::spawn_auto_check(app.handle().clone());
             crate::core::indexer::spawn_index_workers(app.handle().clone());
             commands::search::init_everything(app.handle());
             commands::clipboard::spawn_watcher(app.handle().clone());
@@ -37,15 +41,44 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             match event {
+                tauri::WindowEvent::Focused(true) if window.label() == "main" => {
+                    crate::core::window::mark_main_focused();
+                }
                 // Cửa sổ chính mất focus -> tự ẩn (hành vi giống Spotlight)
                 tauri::WindowEvent::Focused(false) if window.label() == "main" => {
-                    use tauri::Emitter;
-                    let _ = window.hide();
-                    let _ = window.emit("winspot://hidden", ());
-                    crate::core::window::trim_memory();
+                    // Delay very briefly: native dialogs owned by HeaSpot also
+                    // cause a blur event, but must not close the launcher. The
+                    // foreground process check distinguishes them from another
+                    // application receiving focus.
+                    let app = window.app_handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                        if crate::core::window::should_hide_for_focus_loss() {
+                            crate::core::window::hide_main(&app);
+                        }
+                    });
                 }
                 // Đóng cửa sổ Settings -> chỉ ẩn để mở lại được (không thoát app)
                 tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "settings" => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // The progress window may outlive the launcher for a long
+                // uninstall. Closing while active minimizes it instead of
+                // losing the only observer; the tray can restore it.
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if window.label() == "uninstall-progress" =>
+                {
+                    api.prevent_close();
+                    if crate::commands::system::uninstall_is_running() {
+                        let _ = window.minimize();
+                    } else {
+                        let _ = window.hide();
+                    }
+                }
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if window.label() == "update-progress" =>
+                {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -75,6 +108,8 @@ pub fn run() {
             commands::otp::set_otp_archived,
             commands::otp::delete_otp_account,
             commands::otp::copy_otp_code,
+            commands::otp::get_otp_secret,
+            commands::otp::copy_otp_secret,
             commands::otp::list_otp_history,
             commands::otp::clear_otp_history,
             commands::otp::export_otp_backup,
@@ -91,6 +126,10 @@ pub fn run() {
             commands::system::run_as_admin,
             commands::system::open_file_location,
             commands::system::uninstall_app,
+            commands::system::get_uninstall_progress,
+            commands::updater::check_for_updates,
+            commands::updater::install_available_update,
+            commands::updater::get_update_progress,
             commands::system::service_action,
             plugins::window_walker::list_windows,
             plugins::window_walker::focus_window,
@@ -126,6 +165,8 @@ pub fn run() {
             crate::core::hotkey::suspend_hotkeys,
             crate::core::hotkey::resume_hotkeys,
             crate::core::window::resize_window,
+            crate::core::window::show_and_focus_main,
+            crate::core::window::restore_main_window,
             crate::core::window::hide_and_trim,
             crate::core::window::open_settings_window,
         ])

@@ -130,7 +130,7 @@ fn scan_desktop_apps() -> (Vec<AppEntry>, HashSet<String>) {
     // Apps & features. Index DisplayIcon của các uninstall entry đó.
     scan_uninstall_registry_apps(&mut apps, &mut seen);
 
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|app| app.name.to_lowercase());
     (apps, seen)
 }
 
@@ -138,22 +138,50 @@ fn scan_uninstall_registry_apps(apps: &mut Vec<AppEntry>, seen: &mut HashSet<Str
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
     let locations = [
-        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (
+            HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ),
     ];
     for (root, location) in locations {
-        let Ok(key) = RegKey::predef(root).open_subkey(location) else { continue };
+        let Ok(key) = RegKey::predef(root).open_subkey(location) else {
+            continue;
+        };
         for child in key.enum_keys().flatten() {
-            let Ok(entry) = key.open_subkey(child) else { continue };
+            let Ok(entry) = key.open_subkey(child) else {
+                continue;
+            };
             let name: String = entry.get_value("DisplayName").unwrap_or_default();
             let icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
             let uninstall: String = entry.get_value("UninstallString").unwrap_or_default();
-            if name.trim().is_empty() || icon.trim().is_empty() || uninstall.trim().is_empty() { continue; }
-            let path = icon.trim().trim_matches('"').split(',').next().unwrap_or("").trim_matches('"').to_string();
-            if !Path::new(&path).is_file() { continue; }
+            if name.trim().is_empty() || icon.trim().is_empty() || uninstall.trim().is_empty() {
+                continue;
+            }
+            let path = icon
+                .trim()
+                .trim_matches('"')
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .to_string();
+            if !Path::new(&path).is_file() {
+                continue;
+            }
             if seen.insert(name.to_lowercase()) {
-                apps.push(AppEntry { name, path, icon: None });
+                apps.push(AppEntry {
+                    name,
+                    path,
+                    icon: None,
+                });
             }
         }
     }
@@ -282,18 +310,32 @@ fn scan_app_paths_registry(apps: &mut Vec<AppEntry>, seen: &mut HashSet<String>)
 
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let hive = RegKey::predef(root);
-        let Ok(app_paths) = hive.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") else {
+        let Ok(app_paths) =
+            hive.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths")
+        else {
             continue;
         };
         for key in app_paths.enum_keys().flatten() {
-            let Ok(sub) = app_paths.open_subkey(&key) else { continue };
-            let Ok(exe_path) = sub.get_value::<String, _>("") else { continue };
+            let Ok(sub) = app_paths.open_subkey(&key) else {
+                continue;
+            };
+            let Ok(exe_path) = sub.get_value::<String, _>("") else {
+                continue;
+            };
             let exe_path = exe_path.trim_matches('"').to_string();
-            if !Path::new(&exe_path).exists() { continue; }
+            if !Path::new(&exe_path).exists() {
+                continue;
+            }
             let name = key.trim_end_matches(".exe").to_string();
-            if name.is_empty() { continue; }
+            if name.is_empty() {
+                continue;
+            }
             if seen.insert(name.to_lowercase()) {
-                apps.push(AppEntry { name, icon: None, path: exe_path });
+                apps.push(AppEntry {
+                    name,
+                    icon: None,
+                    path: exe_path,
+                });
             }
         }
     }

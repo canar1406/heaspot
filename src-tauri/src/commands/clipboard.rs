@@ -9,8 +9,8 @@ use md5::Digest;
 use rusqlite::params;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Clipboard history behaves as an MRU list, not an event log. Re-copying the
@@ -37,7 +37,8 @@ fn push_unique_clip(
             "SELECT content FROM clipboard WHERE kind = 'image' AND content_hash = ?1 LIMIT 1",
             params![content_hash],
             |row| row.get(0),
-        ).ok()
+        )
+        .ok()
     } else {
         None
     };
@@ -53,7 +54,9 @@ fn push_unique_clip(
     tx.commit()?;
     // Remove the superseded cached PNG only after the database move commits.
     if let Some(path) = old_image_path {
-        if path != content { let _ = std::fs::remove_file(path); }
+        if path != content {
+            let _ = std::fs::remove_file(path);
+        }
     }
     Ok(())
 }
@@ -72,8 +75,10 @@ pub struct ClipItem {
 static SUPPRESS_WATCHER_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 pub fn suppress_watcher_for(duration_ms: u64) {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
     SUPPRESS_WATCHER_UNTIL_MS.store(now.saturating_add(duration_ms), Ordering::Relaxed);
 }
 
@@ -90,7 +95,11 @@ pub fn spawn_watcher(app: AppHandle) {
             return;
         };
         let mut policy = crate::commands::settings::load(&conn);
-        prune_clip_history(&conn, policy.max_clipboard_items, policy.clipboard_retention_days);
+        prune_clip_history(
+            &conn,
+            policy.max_clipboard_items,
+            policy.clipboard_retention_days,
+        );
         cleanup_clip_cache(&conn);
         let mut policy_ticks: u8 = 0;
         let mut last_text: Option<String> = conn
@@ -105,13 +114,21 @@ pub fn spawn_watcher(app: AppHandle) {
 
         loop {
             std::thread::sleep(Duration::from_millis(700));
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64).unwrap_or(0);
-            if now < SUPPRESS_WATCHER_UNTIL_MS.load(Ordering::Relaxed) { continue; }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if now < SUPPRESS_WATCHER_UNTIL_MS.load(Ordering::Relaxed) {
+                continue;
+            }
             policy_ticks = policy_ticks.saturating_add(1);
             if policy_ticks >= 30 {
                 policy = crate::commands::settings::load(&conn);
-                prune_clip_history(&conn, policy.max_clipboard_items, policy.clipboard_retention_days);
+                prune_clip_history(
+                    &conn,
+                    policy.max_clipboard_items,
+                    policy.clipboard_retention_days,
+                );
                 policy_ticks = 0;
             }
 
@@ -121,8 +138,13 @@ pub fn spawn_watcher(app: AppHandle) {
             }
             let source = foreground_process_name();
             let source_l = source.to_lowercase();
-            if policy.privacy_apps.split([',', ';', '\n']).map(str::trim).filter(|s| !s.is_empty())
-                .any(|app_name| source_l.contains(&app_name.to_lowercase())) {
+            if policy
+                .privacy_apps
+                .split([',', ';', '\n'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .any(|app_name| source_l.contains(&app_name.to_lowercase()))
+            {
                 continue;
             }
 
@@ -170,7 +192,11 @@ pub fn spawn_watcher(app: AppHandle) {
 
             if inserted {
                 // Auto-cleanup: giữ tối đa MAX_UNPINNED item chưa pin
-                prune_clip_history(&conn, policy.max_clipboard_items, policy.clipboard_retention_days);
+                prune_clip_history(
+                    &conn,
+                    policy.max_clipboard_items,
+                    policy.clipboard_retention_days,
+                );
                 // Báo UI update real-time nếu đang mở
                 let _ = app.emit("clipboard://changed", ());
             }
@@ -466,7 +492,9 @@ pub fn paste_text(text: String, app: AppHandle) -> Result<(), String> {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP};
         use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
         let prev = crate::core::window::prev_foreground();
-        if prev != 0 { SetForegroundWindow(prev as _); }
+        if prev != 0 {
+            SetForegroundWindow(prev as _);
+        }
         std::thread::sleep(Duration::from_millis(120));
         keybd_event(0x11, 0, 0, 0);
         keybd_event(0x56, 0, 0, 0);
@@ -478,14 +506,22 @@ pub fn paste_text(text: String, app: AppHandle) -> Result<(), String> {
 
 /// Ghi danh sách đường dẫn thành CF_HDROP để Explorer/app đích nhận đúng file thật.
 fn write_file_list_clipboard(content: &str) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
-    use windows_sys::Win32::Foundation::GlobalFree;
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
     const CF_HDROP: u32 = 15;
-    let paths: Vec<&str> = content.lines().map(str::trim).filter(|p| !p.is_empty()).collect();
-    if paths.is_empty() { return Err("danh sách file trống".into()); }
+    let paths: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if paths.is_empty() {
+        return Err("danh sách file trống".into());
+    }
 
     // DROPFILES header (20 byte), theo sau là chuỗi UTF-16 multi-string kết thúc bằng hai NUL.
     let mut data = vec![0u8; 20];
@@ -497,26 +533,41 @@ fn write_file_list_clipboard(content: &str) -> Result<(), String> {
         wide.push(0);
     }
     wide.push(0);
-    let wide_bytes = unsafe { std::slice::from_raw_parts(wide.as_ptr() as *const u8, wide.len() * 2) };
+    let wide_bytes =
+        unsafe { std::slice::from_raw_parts(wide.as_ptr() as *const u8, wide.len() * 2) };
     data.extend_from_slice(wide_bytes);
 
     unsafe {
         let mem = GlobalAlloc(GMEM_MOVEABLE, data.len());
-        if mem.is_null() { return Err("không cấp phát được bộ nhớ clipboard".into()); }
+        if mem.is_null() {
+            return Err("không cấp phát được bộ nhớ clipboard".into());
+        }
         let ptr = GlobalLock(mem);
-        if ptr.is_null() { GlobalFree(mem); return Err("không khóa được bộ nhớ clipboard".into()); }
+        if ptr.is_null() {
+            GlobalFree(mem);
+            return Err("không khóa được bộ nhớ clipboard".into());
+        }
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
         GlobalUnlock(mem);
         let mut opened = false;
         for _ in 0..5 {
-            if OpenClipboard(std::ptr::null_mut()) != 0 { opened = true; break; }
+            if OpenClipboard(std::ptr::null_mut()) != 0 {
+                opened = true;
+                break;
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
-        if !opened { GlobalFree(mem); return Err("clipboard đang bị ứng dụng khác giữ".into()); }
+        if !opened {
+            GlobalFree(mem);
+            return Err("clipboard đang bị ứng dụng khác giữ".into());
+        }
         EmptyClipboard();
         let result = SetClipboardData(CF_HDROP, mem as _);
         CloseClipboard();
-        if result.is_null() { GlobalFree(mem); return Err("không ghi được danh sách file".into()); }
+        if result.is_null() {
+            GlobalFree(mem);
+            return Err("không ghi được danh sách file".into());
+        }
     }
     Ok(())
 }
@@ -528,10 +579,14 @@ fn prune_clip_history(conn: &rusqlite::Connection, max_unpinned: u32, retention_
             "SELECT content FROM clipboard WHERE kind = 'image' AND is_pinned = 0 \
              AND created_at < datetime('now', 'localtime', ?1)",
         ) {
-            let paths: Vec<String> = stmt.query_map(params![modifier], |r| r.get(0))
-                .map(|rows| rows.flatten().collect()).unwrap_or_default();
+            let paths: Vec<String> = stmt
+                .query_map(params![modifier], |r| r.get(0))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default();
             drop(stmt);
-            for path in paths { let _ = std::fs::remove_file(path); }
+            for path in paths {
+                let _ = std::fs::remove_file(path);
+            }
         }
         let modifier = format!("-{retention_days} days");
         let _ = conn.execute(
@@ -542,10 +597,14 @@ fn prune_clip_history(conn: &rusqlite::Connection, max_unpinned: u32, retention_
     let sql = "SELECT content FROM clipboard WHERE kind = 'image' AND is_pinned = 0 AND id NOT IN \
                (SELECT id FROM clipboard WHERE is_pinned = 0 ORDER BY id DESC LIMIT ?1)";
     if let Ok(mut stmt) = conn.prepare(sql) {
-        let paths: Vec<String> = stmt.query_map(params![max_unpinned], |r| r.get(0))
-            .map(|rows| rows.flatten().collect()).unwrap_or_default();
+        let paths: Vec<String> = stmt
+            .query_map(params![max_unpinned], |r| r.get(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default();
         drop(stmt);
-        for path in paths { let _ = std::fs::remove_file(path); }
+        for path in paths {
+            let _ = std::fs::remove_file(path);
+        }
     }
     let _ = conn.execute(
         "DELETE FROM clipboard WHERE is_pinned = 0 AND id NOT IN \
@@ -557,13 +616,19 @@ fn prune_clip_history(conn: &rusqlite::Connection, max_unpinned: u32, retention_
 /// Xóa các PNG mồ côi còn sót sau crash/nâng cấp; chỉ giữ file còn được DB tham chiếu.
 fn cleanup_clip_cache(conn: &rusqlite::Connection) {
     use std::collections::HashSet;
-    let referenced: HashSet<PathBuf> = conn.prepare("SELECT content FROM clipboard WHERE kind = 'image'")
-        .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().map(PathBuf::from).collect()))
+    let referenced: HashSet<PathBuf> = conn
+        .prepare("SELECT content FROM clipboard WHERE kind = 'image'")
+        .and_then(|mut s| {
+            s.query_map([], |r| r.get::<_, String>(0))
+                .map(|rows| rows.flatten().map(PathBuf::from).collect())
+        })
         .unwrap_or_default();
     if let Ok(entries) = std::fs::read_dir(crate::db::clips_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && !referenced.contains(&path) { let _ = std::fs::remove_file(path); }
+            if path.is_file() && !referenced.contains(&path) {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 }
@@ -682,8 +747,9 @@ mod tests {
                 thumb TEXT NOT NULL DEFAULT '',
                 is_pinned INTEGER NOT NULL DEFAULT 0,
                 content_hash TEXT NOT NULL DEFAULT ''
-            );"
-        ).unwrap();
+            );",
+        )
+        .unwrap();
         conn
     }
 
@@ -693,12 +759,20 @@ mod tests {
         push_unique_clip(&conn, "alpha", "text", "one", "", "").unwrap();
         push_unique_clip(&conn, "beta", "text", "two", "", "").unwrap();
         push_unique_clip(&conn, "alpha", "text", "three", "", "").unwrap();
-        let rows: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM clipboard WHERE content = 'alpha'", [], |r| r.get(0)
-        ).unwrap();
-        let newest: String = conn.query_row(
-            "SELECT content FROM clipboard ORDER BY id DESC LIMIT 1", [], |r| r.get(0)
-        ).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard WHERE content = 'alpha'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let newest: String = conn
+            .query_row(
+                "SELECT content FROM clipboard ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(rows, 1);
         assert_eq!(newest, "alpha");
     }
@@ -707,11 +781,16 @@ mod tests {
     fn moving_content_preserves_pin() {
         let conn = db();
         push_unique_clip(&conn, "keep", "text", "one", "", "").unwrap();
-        conn.execute("UPDATE clipboard SET is_pinned = 1", []).unwrap();
+        conn.execute("UPDATE clipboard SET is_pinned = 1", [])
+            .unwrap();
         push_unique_clip(&conn, "keep", "text", "two", "", "").unwrap();
-        let pinned: i64 = conn.query_row(
-            "SELECT is_pinned FROM clipboard WHERE content = 'keep'", [], |r| r.get(0)
-        ).unwrap();
+        let pinned: i64 = conn
+            .query_row(
+                "SELECT is_pinned FROM clipboard WHERE content = 'keep'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(pinned, 1);
     }
 }
