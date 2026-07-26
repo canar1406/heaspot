@@ -12,7 +12,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 pub struct BrowserPassword {
@@ -33,25 +33,33 @@ fn browsers() -> Vec<Browser> {
     let mut list = vec![
         ("Edge", local.join(r"Microsoft\Edge\User Data")),
         ("Chrome", local.join(r"Google\Chrome\User Data")),
-        ("Brave", local.join(r"BraveSoftware\Brave-Browser\User Data")),
+        (
+            "Brave",
+            local.join(r"BraveSoftware\Brave-Browser\User Data"),
+        ),
         ("Cốc Cốc", local.join(r"CocCoc\Browser\User Data")),
         ("Opera", roaming.join(r"Opera Software\Opera Stable")),
         ("Vivaldi", local.join(r"Vivaldi\User Data")),
     ];
     list.retain(|(_, p)| p.exists());
-    list.into_iter().map(|(name, user_data)| Browser { name, user_data }).collect()
+    list.into_iter()
+        .map(|(name, user_data)| Browser { name, user_data })
+        .collect()
 }
 
 /// DPAPI: giải mã blob về plaintext (CryptUnprotectData, phạm vi user hiện tại)
 unsafe fn dpapi_decrypt(data: &[u8]) -> Option<Vec<u8>> {
     use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    let mut in_blob = CRYPT_INTEGER_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
-    let mut out_blob = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
     let ok = CryptUnprotectData(
-        &mut in_blob,
+        &in_blob,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -68,7 +76,7 @@ unsafe fn dpapi_decrypt(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Lấy khóa AES từ Local State (bọc DPAPI)
-fn master_key(user_data: &PathBuf) -> Option<Vec<u8>> {
+fn master_key(user_data: &Path) -> Option<Vec<u8>> {
     let local_state = std::fs::read_to_string(user_data.join("Local State")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&local_state).ok()?;
     let b64 = v.get("os_crypt")?.get("encrypted_key")?.as_str()?;
@@ -90,7 +98,13 @@ fn decrypt_value(enc: &[u8], key: &[u8]) -> Option<String> {
         let ciphertext = &enc[15..];
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
         let plain = cipher
-            .decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: b"" })
+            .decrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: b"",
+                },
+            )
             .ok()?;
         return String::from_utf8(plain).ok();
     }
@@ -104,13 +118,12 @@ fn read_profile(browser: &str, key: &[u8], login_db: &PathBuf, out: &mut Vec<Bro
     if std::fs::copy(login_db, &tmp).is_err() {
         return;
     }
-    if let Ok(conn) = rusqlite::Connection::open_with_flags(
-        &tmp,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT origin_url, username_value, password_value FROM logins",
-        ) {
+    if let Ok(conn) =
+        rusqlite::Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    {
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT origin_url, username_value, password_value FROM logins")
+        {
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -152,16 +165,24 @@ pub fn list_passwords(
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let enabled = conn
-            .query_row("SELECT value FROM settings WHERE key='enable_browser_passwords'", [], |r| r.get::<_, String>(0))
+            .query_row(
+                "SELECT value FROM settings WHERE key='enable_browser_passwords'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
             .unwrap_or_default();
         if enabled != "true" {
-            return Err("Tính năng đọc mật khẩu trình duyệt đang tắt — bật trong Settings để dùng".into());
+            return Err(
+                "Tính năng đọc mật khẩu trình duyệt đang tắt — bật trong Settings để dùng".into(),
+            );
         }
     }
 
     let mut all: Vec<BrowserPassword> = Vec::new();
     for b in browsers() {
-        let Some(key) = master_key(&b.user_data) else { continue };
+        let Some(key) = master_key(&b.user_data) else {
+            continue;
+        };
         // Quét các profile: Default, Profile 1..N và cả thư mục gốc (Opera)
         let mut dbs: Vec<PathBuf> = Vec::new();
         let root_db = b.user_data.join("Login Data");
@@ -209,7 +230,9 @@ pub fn copy_secret(text: String) -> Result<(), String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
 
     const CF_UNICODETEXT: u32 = 13;
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();

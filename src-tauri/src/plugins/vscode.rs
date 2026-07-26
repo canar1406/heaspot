@@ -89,11 +89,9 @@ pub fn vscode_recent(query: String) -> Vec<VsCodeEntry> {
 }
 
 fn read_history_json(db: &PathBuf) -> Option<String> {
-    let conn = rusqlite::Connection::open_with_flags(
-        db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
     conn.query_row(
         "SELECT value FROM ItemTable WHERE key = 'history.recentlyOpenedPathsList'",
         [],

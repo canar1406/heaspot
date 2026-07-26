@@ -60,9 +60,16 @@ fn html_to_text(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&#x27;", "'").replace("&#39;", "'").replace("&quot;", "\"")
-        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
-        .split_whitespace().collect::<Vec<_>>().join(" ")
+    out.replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Serper.dev — Google SERP API (đăng ký free 2500 lượt, KHÔNG cần thẻ).
@@ -85,7 +92,12 @@ fn serper_search(query: &str, key: &str) -> QuickAnswer {
 
     let mut parts: Vec<String> = Vec::new();
     let mut first_url = String::new();
-    let s = |val: &serde_json::Value, k: &str| val.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let s = |val: &serde_json::Value, k: &str| {
+        val.get(k)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
 
     // 1. Answer box (giống ô trả lời nhanh của Google)
     if let Some(ab) = v.get("answerBox") {
@@ -163,7 +175,8 @@ fn is_english_word(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 40
         && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && s.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
 }
 
 /// Khử trùng lặp giữ thứ tự, bỏ rỗng.
@@ -193,7 +206,11 @@ fn fetch_dict(word: &str) -> DictData {
     let Some(v) = http_json(&url) else { return out };
     let Some(entry) = v.get(0) else { return out };
 
-    out.phonetic = entry.get("phonetic").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    out.phonetic = entry
+        .get("phonetic")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     if let Some(phs) = entry.get("phonetics").and_then(|x| x.as_array()) {
         for p in phs {
             if let Some(a) = p.get("audio").and_then(|x| x.as_str()) {
@@ -217,14 +234,26 @@ fn fetch_dict(word: &str) -> DictData {
         for m in meanings {
             push_strs(&mut out.synonyms, m.get("synonyms"));
             push_strs(&mut out.antonyms, m.get("antonyms"));
-            let pos = m.get("partOfSpeech").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let pos = m
+                .get("partOfSpeech")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             if let Some(defs) = m.get("definitions").and_then(|x| x.as_array()) {
                 for d in defs.iter().take(2) {
                     if out.defs.len() >= 6 {
                         break;
                     }
-                    let en = d.get("definition").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let ex = d.get("example").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let en = d
+                        .get("definition")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let ex = d
+                        .get("example")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     out.defs.push((pos.clone(), en, ex));
                     push_strs(&mut out.synonyms, d.get("synonyms"));
                     push_strs(&mut out.antonyms, d.get("antonyms"));
@@ -242,8 +271,14 @@ fn fetch_dict(word: &str) -> DictData {
 fn fetch_collocations(word: &str) -> Vec<String> {
     let mut out = Vec::new();
     let w1 = word.to_string();
-    let h_right = thread::spawn(move || http_json(&format!("https://api.datamuse.com/words?lc={w1}&sp=*&max=6")));
-    let left = http_json(&format!("https://api.datamuse.com/words?rc={word}&sp=*&max=6"));
+    let h_right = thread::spawn(move || {
+        http_json(&format!(
+            "https://api.datamuse.com/words?lc={w1}&sp=*&max=6"
+        ))
+    });
+    let left = http_json(&format!(
+        "https://api.datamuse.com/words?rc={word}&sp=*&max=6"
+    ));
     let right = h_right.join().ok().flatten();
     if let Some(arr) = right.as_ref().and_then(|v| v.as_array()) {
         for w in arr {
@@ -313,7 +348,11 @@ fn strip_html(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&quot;", "\"").replace("&amp;", "&").replace("&nbsp;", " ").trim().to_string()
+    out.replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
 }
 
 /// PHA 2 — đầy đủ: extract intro hoàn chỉnh (giữ nguyên độ chi tiết). Có cache.
@@ -368,7 +407,9 @@ fn urlencoding(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -395,14 +436,22 @@ pub async fn quick_answer(
         return Ok(QuickAnswer::default());
     }
     let key = q.to_lowercase();
-    if let Some(hit) = quick_answer_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+    if let Some(hit) = quick_answer_cache()
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+    {
         return Ok(hit);
     }
     let serper_key = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        conn.query_row("SELECT value FROM settings WHERE key='serper_api_key'", [], |r| r.get::<_, String>(0))
-            .ok()
-            .filter(|k| !k.trim().is_empty())
+        conn.query_row(
+            "SELECT value FROM settings WHERE key='serper_api_key'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .filter(|k| !k.trim().is_empty())
     };
     let ans = tauri::async_runtime::spawn_blocking(move || {
         // Ưu tiên Serper/Google (phủ hết) nếu có key
@@ -416,15 +465,22 @@ pub async fn quick_answer(
             "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
             urlencoding(&q)
         );
-        let Some(v) = http_json(&url) else { return QuickAnswer::default() };
+        let Some(v) = http_json(&url) else {
+            return QuickAnswer::default();
+        };
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
         // Ưu tiên: Answer > AbstractText > Definition
         let answer = {
             let a = s("Answer");
-            if !a.is_empty() { a }
-            else {
+            if !a.is_empty() {
+                a
+            } else {
                 let ab = s("AbstractText");
-                if !ab.is_empty() { ab } else { s("Definition") }
+                if !ab.is_empty() {
+                    ab
+                } else {
+                    s("Definition")
+                }
             }
         };
         let (source, url) = if !s("AbstractSource").is_empty() {
@@ -444,7 +500,12 @@ pub async fn quick_answer(
             }
         }
 
-        QuickAnswer { answer, source, url, related }
+        QuickAnswer {
+            answer,
+            source,
+            url,
+            related,
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -466,10 +527,18 @@ fn quick_answer_cache() -> &'static Mutex<HashMap<String, QuickAnswer>> {
 
 /// Xoá toàn bộ cache tra cứu trong RAM (dịch, wiki, quick answer).
 pub fn clear_caches() {
-    if let Ok(mut m) = translate_cache().lock() { m.clear(); }
-    if let Ok(mut m) = quick_cache().lock() { m.clear(); }
-    if let Ok(mut m) = wiki_cache().lock() { m.clear(); }
-    if let Ok(mut m) = quick_answer_cache().lock() { m.clear(); }
+    if let Ok(mut m) = translate_cache().lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = quick_cache().lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = wiki_cache().lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = quick_answer_cache().lock() {
+        m.clear();
+    }
 }
 
 /// Cache dịch trong RAM (theo phiên) — tra lại từ cũ là tức thì, không gọi mạng.
@@ -500,7 +569,11 @@ pub async fn quick_translate(query: String) -> Result<QuickTranslation, String> 
     }
     let key = q.to_lowercase();
     // Ưu tiên cache đầy đủ nếu đã có, nếu không thì cache nhanh
-    if let Some(full) = translate_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+    if let Some(full) = translate_cache()
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+    {
         return Ok(QuickTranslation {
             translation: full.translation,
             source_language: full.source_language,
@@ -512,17 +585,31 @@ pub async fn quick_translate(query: String) -> Result<QuickTranslation, String> 
     }
     let hit = tauri::async_runtime::spawn_blocking(move || {
         let first = google_translate(&q, "auto", "vi").ok_or("dịch vụ dịch không phản hồi")?;
-        let detected = first.get(2).and_then(|x| x.as_str()).unwrap_or("auto").to_string();
-        let target = if detected == "vi" { "en".to_string() } else { "vi".to_string() };
+        let detected = first
+            .get(2)
+            .and_then(|x| x.as_str())
+            .unwrap_or("auto")
+            .to_string();
+        let target = if detected == "vi" {
+            "en".to_string()
+        } else {
+            "vi".to_string()
+        };
         let translation = if target == "vi" {
             gt_text(&first)
         } else {
-            google_translate(&q, "auto", &target).map(|v| gt_text(&v)).unwrap_or_default()
+            google_translate(&q, "auto", &target)
+                .map(|v| gt_text(&v))
+                .unwrap_or_default()
         };
         if translation.trim().is_empty() {
             return Err("dịch vụ dịch không trả về kết quả".to_string());
         }
-        Ok::<_, String>(QuickTranslation { translation, source_language: detected, target_language: target })
+        Ok::<_, String>(QuickTranslation {
+            translation,
+            source_language: detected,
+            target_language: target,
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -543,7 +630,11 @@ pub async fn translate_lookup(query: String) -> Result<TranslationHit, String> {
         return Err("nội dung dịch trống".into());
     }
     let key = q.to_lowercase();
-    if let Some(hit) = translate_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+    if let Some(hit) = translate_cache()
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+    {
         return Ok(hit);
     }
 
@@ -576,13 +667,27 @@ fn do_translate(q: &str) -> Result<TranslationHit, String> {
         (None, None)
     };
 
-    let first = h_trans.join().ok().flatten().ok_or("dịch vụ dịch không phản hồi")?;
-    let detected = first.get(2).and_then(|x| x.as_str()).unwrap_or("auto").to_string();
-    let target = if detected == "vi" { "en".to_string() } else { "vi".to_string() };
+    let first = h_trans
+        .join()
+        .ok()
+        .flatten()
+        .ok_or("dịch vụ dịch không phản hồi")?;
+    let detected = first
+        .get(2)
+        .and_then(|x| x.as_str())
+        .unwrap_or("auto")
+        .to_string();
+    let target = if detected == "vi" {
+        "en".to_string()
+    } else {
+        "vi".to_string()
+    };
     let translation = if target == "vi" {
         gt_text(&first)
     } else {
-        google_translate(q, "auto", &target).map(|v| gt_text(&v)).unwrap_or_default()
+        google_translate(q, "auto", &target)
+            .map(|v| gt_text(&v))
+            .unwrap_or_default()
     };
     if translation.trim().is_empty() {
         return Err("dịch vụ dịch không trả về kết quả".into());
@@ -631,10 +736,15 @@ fn do_translate(q: &str) -> Result<TranslationHit, String> {
                 .map(|(_, en, _)| en.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let vi_full = google_translate(&joined, "en", "vi").map(|v| gt_text(&v)).unwrap_or_default();
+            let vi_full = google_translate(&joined, "en", "vi")
+                .map(|v| gt_text(&v))
+                .unwrap_or_default();
             let vi_lines: Vec<&str> = vi_full.split('\n').collect();
             for (i, (pos, en, ex)) in d.defs.iter().enumerate() {
-                let vi = vi_lines.get(i).map(|s| s.trim().to_string()).unwrap_or_default();
+                let vi = vi_lines
+                    .get(i)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
                 entries.push(TranslationEntry {
                     part_of_speech: pos.clone(),
                     definition_en: en.clone(),

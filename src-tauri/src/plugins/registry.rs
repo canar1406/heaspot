@@ -39,7 +39,9 @@ pub fn registry_search(query: String) -> Vec<RegKeyInfo> {
         return ["HKCU", "HKLM", "HKCR", "HKU", "HKCC"]
             .iter()
             .map(|r| RegKeyInfo {
-                path: parse_root(r).map(|(_, full)| full.to_string()).unwrap_or_default(),
+                path: parse_root(r)
+                    .map(|(_, full)| full.to_string())
+                    .unwrap_or_default(),
                 name: r.to_string(),
             })
             .collect();

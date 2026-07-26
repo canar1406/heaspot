@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion, useAnimationControls } from "framer-motion";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SearchBar } from "./components/SearchBar";
@@ -172,9 +171,7 @@ export default function App() {
       setRefreshKey((k) => k + 1);
       controls.set({ opacity: 0, scale: 0.98, y: -6 });
       requestAnimationFrame(async () => {
-        const win = getCurrentWindow();
-        await win.show().catch(() => {});
-        await win.setFocus().catch(() => {});
+        await invoke("show_and_focus_main").catch(() => {});
         inputRef.current?.focus();
         // prefill có sẵn -> đặt con trỏ cuối để gõ tiếp; không có -> select toàn bộ
         if (prefill) {
@@ -274,16 +271,40 @@ export default function App() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  // Capture Escape at window level so focused textareas/forms/components
+  // cannot swallow it. Nested UI closes first; otherwise Esc always hides the
+  // launcher while it owns the keyboard focus.
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (uninstallPrompt) {
+        if (!uninstallPrompt.running) closeUninstallPrompt();
+      } else if (ctxOpen) {
+        setCtxOpen(false);
+      } else if (snipOpen) {
+        setSnipOpen(false);
+      } else {
+        hide();
+      }
+    };
+    window.addEventListener("keydown", onEscape, true);
+    return () => window.removeEventListener("keydown", onEscape, true);
+  });
+
   const confirmUninstall = async () => {
     const prompt = uninstallPrompt;
     if (!prompt || prompt.running || !prompt.item.path) return;
     setUninstallPrompt({ ...prompt, running: true, error: undefined });
     try {
+      const operationId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
       await invoke("uninstall_app", {
+        operationId,
         title: prompt.item.title,
         path: prompt.item.path,
       });
-      hide();
+      closeUninstallPrompt();
     } catch (err) {
       setUninstallPrompt({
         ...prompt,
@@ -440,9 +461,7 @@ export default function App() {
             preview,
           });
           setIndex(0);
-          const win = getCurrentWindow();
-          await win.show().catch(() => {});
-          await win.setFocus().catch(() => {});
+          await invoke("restore_main_window").catch(() => {});
           inputRef.current?.focus();
           break;
         }
@@ -767,7 +786,6 @@ export default function App() {
           quickSubmitToken={otpQuickSubmit}
           onConsumeInput={otpQuickInput === null ? () => setQuery(kw.otp) : undefined}
           onQuickComplete={() => setQuery(kw.otp)}
-          onFocusSearch={() => inputRef.current?.focus()}
         />
       ) : (
         <>
@@ -883,7 +901,8 @@ export default function App() {
             </div>
             <div className="mt-2 text-[12.5px] leading-relaxed text-zinc-600 dark:text-zinc-300">
               HeaSpot sẽ dùng trình gỡ cài đặt chính thức của ứng dụng. Nếu đây là app portable,
-              chỉ file .exe đã chọn sẽ bị xóa.
+              chỉ file .exe đã chọn sẽ bị xóa. Tiến trình sẽ mở trong một cửa sổ riêng, còn launcher
+              vẫn tiếp tục sử dụng được.
             </div>
             <div className="mt-2 truncate rounded-lg bg-black/5 px-3 py-2 text-[11px] text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
               {uninstallPrompt.item.path}

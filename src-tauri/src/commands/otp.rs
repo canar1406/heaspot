@@ -268,6 +268,25 @@ fn decode_base32(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+fn encode_base32(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut output = String::with_capacity((input.len() * 8).div_ceil(5));
+    let mut buffer = 0u32;
+    let mut bits = 0u8;
+    for &byte in input {
+        buffer = (buffer << 8) | byte as u32;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(ALPHABET[((buffer >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        output.push(ALPHABET[((buffer << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    output
+}
+
 fn parse_otp_input(input: &str) -> Result<OtpConfig, String> {
     let input = input.trim();
     if input.is_empty() {
@@ -443,8 +462,10 @@ fn code_for(config: &OtpConfig, now: u64) -> Result<OtpPreview, String> {
 }
 
 unsafe fn dpapi_encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
-    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
-    let mut input = CRYPT_INTEGER_BLOB {
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+    let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
@@ -453,16 +474,19 @@ unsafe fn dpapi_encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         pbData: std::ptr::null_mut(),
     };
     let ok = CryptProtectData(
-        &mut input,
+        &input,
         std::ptr::null(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
-        0,
+        CRYPTPROTECT_UI_FORBIDDEN,
         &mut output,
     );
     if ok == 0 || output.pbData.is_null() {
-        return Err("Windows không mã hóa được secret 2FA".into());
+        let code = windows_sys::Win32::Foundation::GetLastError();
+        return Err(format!(
+            "Windows không mã hóa được secret 2FA (Win32 error {code})"
+        ));
     }
     let protected = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
     windows_sys::Win32::Foundation::LocalFree(output.pbData as _);
@@ -470,8 +494,10 @@ unsafe fn dpapi_encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 unsafe fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    let mut input = CRYPT_INTEGER_BLOB {
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+    let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
@@ -480,16 +506,19 @@ unsafe fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         pbData: std::ptr::null_mut(),
     };
     let ok = CryptUnprotectData(
-        &mut input,
+        &input,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
-        0,
+        CRYPTPROTECT_UI_FORBIDDEN,
         &mut output,
     );
     if ok == 0 || output.pbData.is_null() {
-        return Err("Không giải mã được secret 2FA cho tài khoản Windows hiện tại".into());
+        let code = windows_sys::Win32::Foundation::GetLastError();
+        return Err(format!(
+            "Không giải mã được secret 2FA cho tài khoản Windows hiện tại (Win32 error {code})"
+        ));
     }
     let plain = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
     windows_sys::Win32::Foundation::LocalFree(output.pbData as _);
@@ -703,7 +732,7 @@ fn quick_add_otp_account_with_conn(
         ],
     )
     .map_err(|error| error.to_string())?;
-    let account = load_account(&conn, conn.last_insert_rowid())?;
+    let account = load_account(conn, conn.last_insert_rowid())?;
     Ok(OtpQuickAddResult {
         account: account_view(account, unix_now())?,
         created: true,
@@ -716,11 +745,18 @@ pub fn list_otp_accounts(
     archived: bool,
 ) -> Result<Vec<OtpAccountView>, String> {
     let conn = state.db.lock().map_err(|error| error.to_string())?;
+    list_otp_accounts_with_conn(&conn, archived)
+}
+
+fn list_otp_accounts_with_conn(
+    conn: &rusqlite::Connection,
+    archived: bool,
+) -> Result<Vec<OtpAccountView>, String> {
     let mut statement = conn
         .prepare(
             "SELECT id,name,note,issuer,secret_enc,otp_type,algorithm,digits,period,counter,is_pinned,is_archived,created_at,updated_at
              FROM otp_accounts WHERE is_archived=?1
-             ORDER BY is_pinned DESC, name COLLATE NOCASE, id DESC",
+             ORDER BY created_at DESC, id DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -846,6 +882,34 @@ pub fn copy_otp_code(state: State<'_, crate::AppState>, id: i64) -> Result<OtpPr
     };
     crate::plugins::passwords::copy_secret(preview.code.clone())?;
     Ok(preview)
+}
+
+fn account_secret(conn: &rusqlite::Connection, id: i64) -> Result<String, String> {
+    let account = load_account(conn, id)?;
+    let mut secret = unsafe { dpapi_decrypt(&account.secret_enc)? };
+    let encoded = encode_base32(&secret);
+    secret.fill(0);
+    Ok(encoded)
+}
+
+/// Decrypt one explicitly requested secret for display. Account listings never
+/// include secret material, so merely opening the OTP screen does not expose
+/// the whole vault to the WebView.
+#[tauri::command]
+pub fn get_otp_secret(state: State<'_, crate::AppState>, id: i64) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|error| error.to_string())?;
+    account_secret(&conn, id)
+}
+
+/// Copy a stored Base32 seed using the protected clipboard path shared with
+/// passwords and OTP codes (excluded from Windows/HeaSpot history).
+#[tauri::command]
+pub fn copy_otp_secret(state: State<'_, crate::AppState>, id: i64) -> Result<(), String> {
+    let secret = {
+        let conn = state.db.lock().map_err(|error| error.to_string())?;
+        account_secret(&conn, id)?
+    };
+    crate::plugins::passwords::copy_secret(secret)
 }
 
 #[tauri::command]
@@ -1262,12 +1326,19 @@ fn import_otp_backup_with_conn(
 #[cfg(test)]
 mod tests {
     use super::{
-        code_for, dpapi_decrypt, dpapi_encrypt, export_otp_backup_with_conn, generate_code,
-        import_otp_backup_with_conn, parse_otp_input, quick_add_otp_account_with_conn,
+        account_secret, code_for, dpapi_decrypt, dpapi_encrypt, encode_base32,
+        export_otp_backup_with_conn, generate_code, import_otp_backup_with_conn,
+        list_otp_accounts_with_conn, parse_otp_input, quick_add_otp_account_with_conn,
     };
     use rusqlite::params;
 
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn base32_roundtrip_keeps_the_original_secret() {
+        let decoded = parse_otp_input(RFC_SECRET).unwrap().secret;
+        assert_eq!(encode_base32(&decoded), RFC_SECRET);
+    }
 
     #[test]
     fn accepts_grouped_and_ambiguous_base32() {
@@ -1438,5 +1509,44 @@ mod tests {
         assert_eq!(second.skipped, 1);
         assert_eq!(second.history, 0);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn account_list_is_newest_first_and_secret_remains_retrievable() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE otp_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',
+                issuer TEXT NOT NULL DEFAULT '',secret_enc BLOB NOT NULL,otp_type TEXT NOT NULL DEFAULT 'totp',
+                algorithm TEXT NOT NULL DEFAULT 'SHA1',digits INTEGER NOT NULL DEFAULT 6,
+                period INTEGER NOT NULL DEFAULT 30,counter INTEGER NOT NULL DEFAULT 0,
+                is_pinned INTEGER NOT NULL DEFAULT 0,is_archived INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        let parsed = parse_otp_input(RFC_SECRET).unwrap();
+        let protected = unsafe { dpapi_encrypt(&parsed.secret) }.unwrap();
+        for (name, created_at) in [
+            ("Cũ", "2026-07-25 09:00:00"),
+            ("Mới cùng giây A", "2026-07-26 09:00:00"),
+            ("Mới cùng giây B", "2026-07-26 09:00:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO otp_accounts(name,secret_enc,created_at,updated_at) VALUES(?1,?2,?3,?3)",
+                params![name, protected, created_at],
+            )
+            .unwrap();
+        }
+
+        let accounts = list_otp_accounts_with_conn(&conn, false).unwrap();
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Mới cùng giây B", "Mới cùng giây A", "Cũ"]
+        );
+        assert_eq!(account_secret(&conn, accounts[0].id).unwrap(), RFC_SECRET);
     }
 }

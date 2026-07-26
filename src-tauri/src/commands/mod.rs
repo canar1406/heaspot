@@ -6,16 +6,14 @@ pub mod ocr;
 pub mod otp;
 pub mod search;
 pub mod settings;
-pub mod study;
 pub mod snippets;
+pub mod study;
 pub mod system;
+pub mod updater;
 
 /// Chạy một đoạn PowerShell ẩn (không hiện cửa sổ), trả về stdout.
 /// `envs` truyền dữ liệu vào script qua biến môi trường để né quoting hell.
-pub(crate) fn run_hidden_ps(
-    script: &str,
-    envs: &[(&str, &str)],
-) -> Result<String, String> {
+pub(crate) fn run_hidden_ps(script: &str, envs: &[(&str, &str)]) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     // Windows PowerShell 5.1 mặc định ghi redirected stdout theo code page hệ thống.

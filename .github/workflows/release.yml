@@ -1,67 +1,42 @@
-name: Build and publish HeaSpot
+name: Release HeaSpot
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  publish-tauri:
-    name: Build Windows release
+  release-windows:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "src-tauri -> target"
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
         run: npm ci
 
-      # Tag đẩy lên (vd v0.1.3) -> release chính thức.
-      # Push lên main -> cập nhật bản "nightly" (prerelease) build mới nhất.
-      - name: Resolve release info
-        id: rel
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "name=HeaSpot ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "pre=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=nightly" >> "$GITHUB_OUTPUT"
-            echo "name=HeaSpot nightly (bản build mới nhất)" >> "$GITHUB_OUTPUT"
-            echo "pre=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build Tauri and publish GitHub Release
-        uses: tauri-apps/tauri-action@v0
+      - name: Build, sign and publish NSIS updater
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ steps.rel.outputs.tag }}
-          releaseName: ${{ steps.rel.outputs.name }}
-          releaseBody: |
-            HeaSpot cho Windows — launcher kiểu Spotlight/Alfred.
-
-            Tải file cài đặt NSIS (.exe) bên dưới, chạy để cài, rồi bấm Alt+Space để mở HeaSpot.
-            Win+V mở Clipboard Manager. Vào Settings để tùy chỉnh keyword/hotkey.
+          tagName: v__VERSION__
+          releaseName: "HeaSpot v__VERSION__"
+          releaseBody: "Xem ghi chú thay đổi của bản phát hành này."
           releaseDraft: false
-          prerelease: ${{ steps.rel.outputs.pre == 'true' }}
+          prerelease: false
+          updaterJsonPreferNsis: true
+          uploadUpdaterJson: true
+          retryAttempts: 2

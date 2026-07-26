@@ -6,12 +6,15 @@
 
 - **Kho xác thực 2FA/OTP cục bộ**: TOTP/HOTP, SHA-1/SHA-256/SHA-512, 6–8 chữ số, chu kỳ tùy URI; nhận secret Base32 có dấu cách và URI `otpauth://` của Google/Microsoft/OATH.
 - Gõ `otp` để quản lý; gõ **`otp + <secret>` rồi Enter** để thêm nhanh, lưu tài khoản, sinh và copy OTP ngay. Secret trùng không tạo bản sao.
-- Mỗi tài khoản có tên gợi nhớ, chú thích, ngày thêm/cập nhật, ghim, lưu trữ và lịch sử những OTP đã bấm Copy.
+- Mỗi tài khoản có tên gợi nhớ, chú thích, ngày thêm/cập nhật, ghim, lưu trữ và lịch sử những OTP đã bấm Copy. Danh sách luôn xếp mục mới thêm lên đầu; secret có thể hiện/ẩn hoặc copy lại theo từng tài khoản.
 - Secret và OTP history được mã hóa bằng **Windows DPAPI**. Backup di động `.heaspot2fa` dùng **Argon2id + AES-256-GCM**, giữ đầy đủ secret/cấu hình/chú thích/ngày/history và chống import trùng.
+- Launcher tự ẩn ổn định khi chuyển sang ứng dụng khác và `Esc` luôn đóng launcher ở lớp native; cơ chế generation/intent loại bỏ callback focus cũ làm cửa sổ xuất hiện lại, còn native dialog của HeaSpot không bị nhận nhầm là mất focus.
+- Gỡ cài đặt đối chiếu cả tên shortcut, nhóm Start Menu, vị trí cài và registry 32/64-bit; hỗ trợ tên lệch phiên bản như **7-Zip File Manager** ↔ **7-Zip 24.x (x64)**, MSI/UWP/portable và UAC. Tác vụ dài chạy nền trong cửa sổ tiến trình riêng nên launcher vẫn dùng bình thường; HeaSpot chặn tuyệt đối yêu cầu tự gỡ chính mình từ launcher.
+- Sau khi uninstaller kết thúc thành công, chế độ dọn sâu chỉ xóa dấu vết có quan hệ chắc chắn với ứng dụng và hiển thị riêng mục đã xóa, bỏ qua hoặc thất bại; không tuyên bố “đã sạch” khi file còn bị khóa hay thiếu quyền.
+- Auto-update dùng plugin updater chính thức của Tauri: tự kiểm tra sau khi khởi động, cửa sổ cập nhật riêng, release notes/thanh tải và bắt buộc chữ ký trước khi cài. Endpoint/public key cấu hình tại **Settings → Cập nhật**.
 - Hỗ trợ Microsoft **OATH-TOTP**. Push `Approve sign-in`, number matching, passwordless và cặp URL HTTPS + activation code vẫn thuộc giao thức đăng ký riêng của Microsoft Authenticator, không phải secret OTP.
 - Search ưu tiên đúng **app/executable** hơn folder, installer và file trùng tên; app portable cũng được nhận diện và xếp hạng như ứng dụng.
 - Everything 1.4 được nhúng làm engine nền của HeaSpot, cấu hình không tray/không admin; app chỉ quản lý đúng tiến trình bundled của mình và không đụng instance Everything riêng của người dùng.
-- Gỡ cài đặt chạy đúng uninstaller từ Registry thay vì đẩy sang Control Panel; bản portable được xóa trực tiếp sau xác nhận khi đường dẫn an toàn.
 - Clipboard hoạt động như danh sách MRU: copy lại nội dung cũ sẽ **move** item đó lên đầu thay vì nhân bản; vẫn giữ trạng thái ghim và dọn cache ảnh cũ.
 - Thêm mục `emoji` riêng, tìm thông minh bằng tiếng Việt/Anh; các hộp xác nhận nội bộ thay thế dialog trình duyệt để không còn đè lớp giao diện.
 
@@ -74,8 +77,10 @@
 - Kết quả được xếp hạng theo loại và độ khớp thực tế: app/executable chính xác đứng trên installer, folder và file phụ trùng tên. Thuật toán dùng exact, prefix, token/word-boundary, substring và subsequence; không chỉ vá riêng vài alias như `code`.
 - App được lấy từ Start Menu, Registry App Paths, Registry uninstall entries và UWP/Store; executable portable do Everything tìm thấy cũng được nhận diện là app. Icon Shell/Appx vẫn được tải và cache bất đồng bộ để giao diện không khựng nhưng không mất icon thật.
 - Nhấn `→` trên app để mở Context Menu: Open, Run as administrator, Open location, Copy path và **Gỡ cài đặt…**.
-- Gỡ cài đặt tra đúng `UninstallString`/`QuietUninstallString` theo tên và đường dẫn app trong Registry, ưu tiên uninstaller tương tác của nhà phát hành. HeaSpot không mở danh sách Control Panel thay cho thao tác gỡ.
-- Với executable portable không có uninstall entry, HeaSpot chỉ cho xóa chính file `.exe` sau xác nhận nếu file nằm ngoài Windows/Program Files và không phải thư mục, tránh xóa nhầm phạm vi rộng.
+- Gỡ cài đặt tra đúng `UninstallString`/`QuietUninstallString` theo tên và đường dẫn app trong Registry, chuyển đăng ký MSI `/I` thành `/X`, xử lý UAC và chờ uninstaller tương tác của nhà phát hành kết thúc. HeaSpot không mở danh sách Control Panel thay cho thao tác gỡ.
+- Launcher chỉ xác nhận và phát tác vụ. Cửa sổ **Tiến trình gỡ cài đặt** riêng có taskbar/thu nhỏ, không tự ẩn khi đổi focus và mở lại được từ khay hệ thống; vì vậy có thể tiếp tục dùng search/OTP/clipboard trong lúc gỡ lâu.
+- Sau khi uninstaller thành công, HeaSpot quét hậu kỳ các dấu vết có quan hệ chắc chắn với ứng dụng: install path, thư mục product trong AppData/ProgramData, shortcut, khóa Registry uninstall và service có executable nằm trong install path. Kết quả bị khóa hoặc thiếu quyền được báo rõ, không bị tính là “đã sạch”.
+- Với executable portable không có uninstall entry, HeaSpot chỉ cho xóa chính file `.exe` sau xác nhận nếu file nằm trong hồ sơ người dùng và không phải chính HeaSpot, tránh xóa nhầm phạm vi rộng.
 
 Everything là engine con được đóng gói cùng HeaSpot. Bản bundled chạy nền bằng cấu hình riêng trong data directory, không có tray icon, không yêu cầu admin/service và kết thúc khi HeaSpot thoát. Khi phát hiện một Everything do người dùng tự cài, HeaSpot không kill, sửa cấu hình hay gỡ bản đó.
 
@@ -175,7 +180,7 @@ otp + JBSW Y3DP EHPK 3PXP
 
 Nhấn `Enter`: HeaSpot kiểm tra secret, tìm tài khoản đã tồn tại, tạo mới nếu cần, lưu secret, sinh mã hiện tại và copy mã để dán ngay. Nếu tài khoản trùng đang nằm trong Lưu trữ, nó được khôi phục về Đang dùng thay vì tạo bản thứ hai. Chuỗi sau keyword `otp` được chặn ngay tại router và không bao giờ đi tiếp sang Google/web search hoặc provider tìm kiếm khác.
 
-Khi thêm bằng form, có thể đặt **tên gợi nhớ** và **chú thích** như email, công ty/phòng ban hay mục đích sử dụng. Mỗi thẻ hiển thị provider, TOTP/HOTP, thuật toán, mã sống, vòng đếm thời gian, ngày thêm và ngày cập nhật. Có thể đổi tên/chú thích, ghim, lưu trữ/khôi phục hoặc xóa bằng xác nhận hai bước.
+Khi thêm bằng form, có thể đặt **tên gợi nhớ** và **chú thích** như email, công ty/phòng ban hay mục đích sử dụng. Mỗi thẻ hiển thị provider, TOTP/HOTP, thuật toán, mã sống, vòng đếm thời gian, ngày thêm và ngày cập nhật. Tài khoản mới thêm luôn đứng đầu danh sách; trạng thái ghim vẫn được lưu và hiển thị. Có thể hiện/ẩn và copy lại secret key của riêng từng tài khoản, đổi tên/chú thích, ghim, lưu trữ/khôi phục hoặc xóa bằng xác nhận hai bước.
 
 History chỉ ghi những OTP người dùng thực sự bấm **Copy**; việc UI cập nhật mã mỗi giây không tự làm đầy lịch sử. HOTP tăng counter sau lần copy thành công. OTP và password được ghi vào clipboard bằng format `ExcludeClipboardContentFromMonitorProcessing`, vì vậy Windows Clipboard History và HeaSpot Clipboard Manager không thu lại secret/mã vừa copy.
 
@@ -280,7 +285,7 @@ App là kiến trúc **desktop hai lớp**: WebView chỉ phụ trách giao di�
 
 ### Frontend (`src/`)
 
-- **React 18 + TypeScript + Vite**: `App.tsx` điều phối Search/Clipboard và panel quản lý OTP; `main.tsx` dùng cùng bundle nhưng render `SettingsView` cho cửa sổ `settings` riêng.
+- **React 18 + TypeScript + Vite**: `App.tsx` điều phối Search/Clipboard và panel quản lý OTP; `main.tsx` dùng cùng bundle nhưng render `SettingsView` cho cửa sổ `settings`, `UninstallProgressView` cho tác vụ gỡ dài và `UpdateProgressView` cho tải/cài bản cập nhật.
 - **Tailwind CSS + CSS toàn cục**: theme sáng/tối/system, layout hai cột, trạng thái selected/focus và các icon action.
 - **Framer Motion**: animation mở launcher bằng opacity/scale/translate; không remount cây UI. Native window chỉ resize khi kích thước thật sự đổi để tránh khựng khi gõ/chuyển mode.
 - **Router theo keyword trong `useSearch.ts`**: chỉ kích hoạt tính năng khi token đầu khớp đúng keyword (`in`, `tr`, `conv`, `ps`, `otp`…), debounce request async và dùng sequence guard để kết quả cũ không ghi đè truy vấn mới. Riêng secret sau `otp +` được giữ cục bộ và không chuyển sang provider tìm kiếm mạng.
@@ -331,8 +336,9 @@ Everything 1.4.1 được nhúng và chạy nền ẩn. Để không đòi UAC h
 
 - Frontend: `tsc` kiểm kiểu rồi Vite tạo bundle production. Backend: Rust unit tests kiểm parser/hotkey, UTF-8 PowerShell, bộ lọc search, query Everything fallback và 7 ca OTP gồm vector RFC 4226/6238, SHA-256/period 60 của Microsoft, HOTP, DPAPI, backup round-trip và quick-add chống trùng.
 - `scripts/capture-readme.ps1` chạy bản release với profile tạm, thao tác launcher thật bằng hotkey, chụp từng tính năng và kiểm tra kích thước/foreground window; lỗi UI trong lúc chụp khiến script dừng.
+- `scripts/focus-lifecycle-smoke.ps1` mở bản build với profile tạm, lặp chuyển foreground ngay trong cửa sổ race khi launcher vừa hiện, xác nhận HWND native tự ẩn và `Esc` không bị callback cũ làm cửa sổ xuất hiện lại.
 - Release Rust bật `panic=abort`, LTO, một codegen unit, `opt-level=s` và strip symbol để giảm dung lượng.
-- GitHub Actions trên `windows-latest` cài Node 20 + Rust stable, cache Cargo, build Tauri/NSIS; push `main` cập nhật nightly, tag `v*` tạo release chính thức.
+- GitHub Actions trên `windows-latest` cài Node 20 + Rust stable, build Tauri/NSIS và ký updater; tag `v*` tạo release chính thức, còn workflow cũng có thể chạy thủ công.
 
 ## Phát triển
 
@@ -357,4 +363,15 @@ Bộ cài NSIS ở `src-tauri/target/release/bundle/nsis/HeaSpot_*_x64-setup.exe
 
 `.github/workflows/release.yml`:
 - Đẩy tag `v*` (VD `git tag v0.1.15 && git push --tags`) → tạo **release chính thức** kèm bộ cài.
-- Push lên `main` → cập nhật bản **nightly** (prerelease) build mới nhất.
+- Có thể chạy thủ công bằng `workflow_dispatch`; push thường lên `main` không tự phát hành để tránh đưa build chưa gắn version vào kênh stable.
+
+### Auto-update có chữ ký
+
+Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) build NSIS trên Windows, ký updater artifact và tải `latest.json` lên GitHub Release. Trước khi push tag:
+
+1. Tạo cặp khóa bằng `npm run tauri signer generate -- -w ~/.tauri/heaspot.key`. Private key không được commit; `.gitignore` đã chặn `*.key`.
+2. Thêm private key và password vào GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY` và `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Tại **Settings → Cập nhật**, nhập endpoint `https://github.com/canar1406/heaspot/releases/latest/download/latest.json` và public key tương ứng.
+4. Tăng version rồi push tag `vX.Y.Z`. Tauri Action tạo installer, `.sig` và `latest.json`; ứng dụng chỉ cài khi chữ ký khớp.
+
+Không thể tắt xác minh chữ ký của updater. Build phát hành cần hai biến môi trường ký; build local kiểm thử có thể override `bundle.createUpdaterArtifacts=false` nhưng không tạo được gói auto-update.

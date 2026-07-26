@@ -93,10 +93,8 @@ Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction Silen
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 "#;
             let exe_text = exe.to_string_lossy().to_string();
-            let _ = crate::commands::run_hidden_ps(
-                script,
-                &[("HEASPOT_EVERYTHING_EXE", &exe_text)],
-            );
+            let _ =
+                crate::commands::run_hidden_ps(script, &[("HEASPOT_EVERYTHING_EXE", &exe_text)]);
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
 
@@ -146,11 +144,17 @@ pub struct ResultIcon {
 #[tauri::command]
 pub async fn load_result_icons(paths: Vec<String>) -> Result<Vec<ResultIcon>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        paths.into_iter().take(20).map(|path| ResultIcon {
-            icon: crate::core::indexer::icon_for(&path),
-            path,
-        }).collect()
-    }).await.map_err(|e| e.to_string())
+        paths
+            .into_iter()
+            .take(20)
+            .map(|path| ResultIcon {
+                icon: crate::core::indexer::icon_for(&path),
+                path,
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Chấm điểm khớp fuzzy đơn giản: prefix > word-boundary > substring > subsequence
@@ -185,13 +189,18 @@ fn score_match(name: &str, query: &str) -> Option<i32> {
 fn score_path_hit(path: &str, name: &str, query: &str, is_dir: bool, base: i32) -> (bool, i32) {
     let file = std::path::Path::new(path);
     let executable = !is_dir
-        && file.extension().and_then(|ext| ext.to_str())
+        && file
+            .extension()
+            .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
     if !executable {
         return (false, base);
     }
 
-    let stem = file.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
+    let stem = file
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(name);
     let stem_normalized = normalize_search(stem);
     let query_normalized = normalize_search(query.trim());
     let mut score = base.max(score_match(stem, query).unwrap_or(base)) + 10_000;
@@ -199,7 +208,8 @@ fn score_path_hit(path: &str, name: &str, query: &str, is_dir: bool, base: i32) 
         score += 3_000;
     }
     let installer = stem_normalized.contains("setup") || stem_normalized.contains("installer");
-    let asks_for_installer = query_normalized.contains("setup") || query_normalized.contains("install");
+    let asks_for_installer =
+        query_normalized.contains("setup") || query_normalized.contains("install");
     if installer && !asks_for_installer {
         score -= 1_500;
     }
@@ -210,16 +220,26 @@ fn score_path_hit(path: &str, name: &str, query: &str, is_dir: bool, base: i32) 
 /// Stable aliases cover the common executable/product-name mismatch and
 /// initials make queries such as "vsc" useful without weakening file search.
 fn normalize_search(value: &str) -> String {
-    value.to_lowercase().chars().map(|c| match c {
-        'á' | 'à' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' => 'a',
-        'đ' => 'd',
-        'é' | 'è' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => 'e',
-        'í' | 'ì' | 'ỉ' | 'ĩ' | 'ị' => 'i',
-        'ó' | 'ò' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ớ' | 'ờ' | 'ở' | 'ỡ' | 'ợ' => 'o',
-        'ú' | 'ù' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => 'u',
-        'ý' | 'ỳ' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
-        other => other,
-    }).collect()
+    value
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ấ' | 'ầ'
+            | 'ẩ' | 'ẫ' | 'ậ' => 'a',
+            'đ' => 'd',
+            'é' | 'è' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => {
+                'e'
+            }
+            'í' | 'ì' | 'ỉ' | 'ĩ' | 'ị' => 'i',
+            'ó' | 'ò' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ớ' | 'ờ'
+            | 'ở' | 'ỡ' | 'ợ' => 'o',
+            'ú' | 'ù' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => {
+                'u'
+            }
+            'ý' | 'ỳ' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
+            other => other,
+        })
+        .collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -229,7 +249,9 @@ fn edit_distance(a: &str, b: &str) -> usize {
     for (i, ac) in a.iter().enumerate() {
         let mut cur = vec![i + 1; b.len() + 1];
         for (j, bc) in b.iter().enumerate() {
-            cur[j + 1] = (cur[j] + 1).min(prev[j + 1] + 1).min(prev[j] + usize::from(ac != bc));
+            cur[j + 1] = (cur[j] + 1)
+                .min(prev[j + 1] + 1)
+                .min(prev[j] + usize::from(ac != bc));
         }
         prev = cur;
     }
@@ -244,7 +266,11 @@ fn score_app_match(app: &crate::core::indexer::AppEntry, query: &str) -> Option<
     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
         candidates.push(normalize_search(stem));
     }
-    if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) {
+    if let Some(parent) = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+    {
         candidates.push(normalize_search(parent));
     }
     if let Some(app_id) = app.path.strip_prefix("shell:AppsFolder\\") {
@@ -258,17 +284,32 @@ fn score_app_match(app: &crate::core::indexer::AppEntry, query: &str) -> Option<
     candidates.push(normalized.chars().filter(|c| c.is_alphanumeric()).collect());
     candidates.sort();
     candidates.dedup();
-    let mut best = candidates.iter().filter_map(|candidate| score_match(candidate, &q)).max();
+    let mut best = candidates
+        .iter()
+        .filter_map(|candidate| score_match(candidate, &q))
+        .max();
     if initials == q {
         best = Some(best.unwrap_or(0).max(920));
     }
     // Generic typo tolerance: compare the query to every word in all indexed
     // names. One typo is accepted for 4–7 chars, two for longer queries.
-    let tolerance = if q.len() >= 8 { 2 } else if q.len() >= 4 { 1 } else { 0 };
+    let tolerance = if q.len() >= 8 {
+        2
+    } else if q.len() >= 4 {
+        1
+    } else {
+        0
+    };
     if tolerance > 0 {
-        for word in candidates.iter().flat_map(|c| c.split(|x: char| !x.is_alphanumeric())) {
+        for word in candidates
+            .iter()
+            .flat_map(|c| c.split(|x: char| !x.is_alphanumeric()))
+        {
             if !word.is_empty() && edit_distance(word, &q) <= tolerance {
-                best = Some(best.unwrap_or(0).max(650 - edit_distance(word, &q) as i32 * 80));
+                best = Some(
+                    best.unwrap_or(0)
+                        .max(650 - edit_distance(word, &q) as i32 * 80),
+                );
             }
         }
     }
@@ -283,7 +324,13 @@ fn score_app_match(app: &crate::core::indexer::AppEntry, query: &str) -> Option<
             .filter(|w| !w.is_empty())
             .collect();
         let all_match = query_words.iter().all(|needle| {
-            let allowed = if needle.len() >= 8 { 2 } else if needle.len() >= 4 { 1 } else { 0 };
+            let allowed = if needle.len() >= 8 {
+                2
+            } else if needle.len() >= 4 {
+                1
+            } else {
+                0
+            };
             candidate_words.iter().any(|word| {
                 word.starts_with(needle) || (allowed > 0 && edit_distance(word, needle) <= allowed)
             })
@@ -331,10 +378,40 @@ fn is_fulltext_document(path: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "txt" | "md" | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-            | "csv" | "rtf" | "log" | "ini" | "json" | "xml" | "html" | "htm"
-            | "yaml" | "yml" | "toml" | "py" | "js" | "jsx" | "ts" | "tsx"
-            | "rs" | "c" | "cc" | "cpp" | "h" | "hpp" | "java" | "cs" | "sql"
+        "txt"
+            | "md"
+            | "pdf"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "ppt"
+            | "pptx"
+            | "csv"
+            | "rtf"
+            | "log"
+            | "ini"
+            | "json"
+            | "xml"
+            | "html"
+            | "htm"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "py"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "rs"
+            | "c"
+            | "cc"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "java"
+            | "cs"
+            | "sql"
     )
 }
 
@@ -352,11 +429,26 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
 
     // Adaptive ranking: frequently/recently launched apps receive a modest
     // boost, never enough to make an unrelated app match.
-    let usage: std::collections::HashMap<String, i32> = state.db.lock().ok().and_then(|conn| {
-        let mut stmt = conn.prepare("SELECT path, launch_count FROM launch_usage").ok()?;
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))).ok()?;
-        Some(rows.flatten().map(|(path, count)| (path.to_lowercase(), count)).collect())
-    }).unwrap_or_default();
+    let usage: std::collections::HashMap<String, i32> = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT path, launch_count FROM launch_usage")
+                .ok()?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+                })
+                .ok()?;
+            Some(
+                rows.flatten()
+                    .map(|(path, count)| (path.to_lowercase(), count))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
 
     // 1. Apps
     if let Ok(apps) = state.apps.read() {
@@ -375,12 +467,19 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
                     // App LUÔN xếp trên file/folder: cộng offset lớn hơn điểm khớp tối đa
                     // của file (~1000). Nhờ vậy "vscode" -> app "Visual Studio Code" (khớp
                     // mờ) vẫn thắng các folder ".vscode" khớp tên chính xác.
-                    score: s + 10_000 + usage.get(&a.path.to_lowercase()).copied().unwrap_or(0).min(25) * 8,
+                    score: s
+                        + 10_000
+                        + usage
+                            .get(&a.path.to_lowercase())
+                            .copied()
+                            .unwrap_or(0)
+                            .min(25)
+                            * 8,
                     icon: a.icon.clone(),
                 })
             })
             .collect();
-        scored.sort_by(|a, b| b.score.cmp(&a.score));
+        scored.sort_by_key(|item| std::cmp::Reverse(item.score));
         scored.truncate(6);
         results.extend(scored);
     }
@@ -405,7 +504,14 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
             results.push(SearchResult {
                 title: name,
                 subtitle: path.clone(),
-                kind: if is_dir { "folder" } else if executable { "app" } else { "file" }.into(),
+                kind: if is_dir {
+                    "folder"
+                } else if executable {
+                    "app"
+                } else {
+                    "file"
+                }
+                .into(),
                 path,
                 score,
                 icon: None,
@@ -418,21 +524,29 @@ pub fn search_all(query: String, state: tauri::State<'_, crate::AppState>) -> Se
                 score_match(&f.name, &query).map(|s| {
                     let (executable, score) = score_path_hit(&f.path, &f.name, &query, f.is_dir, s);
                     SearchResult {
-                    title: f.name.clone(),
-                    subtitle: f.path.clone(),
-                    kind: if f.is_dir { "folder" } else if executable { "app" } else { "file" }.into(),
-                    path: f.path.clone(),
-                    score,
-                    icon: None,
-                }})
+                        title: f.name.clone(),
+                        subtitle: f.path.clone(),
+                        kind: if f.is_dir {
+                            "folder"
+                        } else if executable {
+                            "app"
+                        } else {
+                            "file"
+                        }
+                        .into(),
+                        path: f.path.clone(),
+                        score,
+                        icon: None,
+                    }
+                })
             })
             .collect();
-        scored.sort_by(|a, b| b.score.cmp(&a.score));
+        scored.sort_by_key(|item| std::cmp::Reverse(item.score));
         scored.truncate(12);
         results.extend(scored);
     }
 
-    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.sort_by_key(|item| std::cmp::Reverse(item.score));
     // Dedup theo path: Everything đôi khi trả cùng path 2 lần và app/file có thể
     // trùng path. Trùng path -> id `kind:path` ở frontend trùng -> React lẫn key
     // -> nhãn Ctrl+N gắn nhầm dòng và highlight lệch. Giữ bản điểm cao nhất.
@@ -478,7 +592,9 @@ impl Everything {
             candidates.push(dir.join("Everything64.dll"));
         }
         candidates.push(PathBuf::from("Everything64.dll"));
-        candidates.push(PathBuf::from(r"C:\Program Files\Everything\Everything64.dll"));
+        candidates.push(PathBuf::from(
+            r"C:\Program Files\Everything\Everything64.dll",
+        ));
         candidates.push(PathBuf::from(
             r"C:\Program Files\Everything\SDK\dll\Everything64.dll",
         ));
@@ -503,10 +619,8 @@ impl Everything {
         unsafe {
             let set_search: libloading::Symbol<SetSearchW> =
                 self.lib.get(b"Everything_SetSearchW\0").ok()?;
-            let set_max: libloading::Symbol<SetMax> =
-                self.lib.get(b"Everything_SetMax\0").ok()?;
-            let query_fn: libloading::Symbol<QueryW> =
-                self.lib.get(b"Everything_QueryW\0").ok()?;
+            let set_max: libloading::Symbol<SetMax> = self.lib.get(b"Everything_SetMax\0").ok()?;
+            let query_fn: libloading::Symbol<QueryW> = self.lib.get(b"Everything_QueryW\0").ok()?;
             let is_db_loaded: libloading::Symbol<IsDbLoaded> =
                 self.lib.get(b"Everything_IsDBLoaded\0").ok()?;
             let num_results: libloading::Symbol<GetNumResults> =
@@ -564,7 +678,8 @@ pub struct FullTextResponse {
 
 /// Cache kết quả full-text theo phiên -> tra lại cùng từ khoá là tức thì.
 fn fulltext_cache() -> &'static Mutex<std::collections::HashMap<String, FullTextResponse>> {
-    static C: OnceLock<Mutex<std::collections::HashMap<String, FullTextResponse>>> = OnceLock::new();
+    static C: OnceLock<Mutex<std::collections::HashMap<String, FullTextResponse>>> =
+        OnceLock::new();
     C.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -626,7 +741,11 @@ pub async fn fulltext_search(query: String) -> Result<FullTextResponse, String> 
         });
     }
     let key = q.to_lowercase();
-    if let Some(hits) = fulltext_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+    if let Some(hits) = fulltext_cache()
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+    {
         return Ok(hits);
     }
 
@@ -691,7 +810,9 @@ try {
                     .to_string(),
             })
         })
-        .filter(|h| !h.path.is_empty() && is_fulltext_document(&h.path) && !is_search_noise(&h.path))
+        .filter(|h| {
+            !h.path.is_empty() && is_fulltext_document(&h.path) && !is_search_noise(&h.path)
+        })
         .collect::<Vec<_>>();
 
     let engine = if hits.is_empty() {
@@ -753,7 +874,10 @@ try {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_everything_content_query, is_fulltext_document, is_search_noise, score_app_match, score_path_hit};
+    use super::{
+        build_everything_content_query, is_fulltext_document, is_search_noise, score_app_match,
+        score_path_hit,
+    };
 
     #[test]
     fn app_aliases_match_product_names() {
@@ -777,13 +901,8 @@ mod tests {
 
     #[test]
     fn exact_portable_app_ranks_above_its_installer_and_folder() {
-        let (_, portable) = score_path_hit(
-            r"C:\Apps\winspot.exe",
-            "winspot.exe",
-            "winspot",
-            false,
-            800,
-        );
+        let (_, portable) =
+            score_path_hit(r"C:\Apps\winspot.exe", "winspot.exe", "winspot", false, 800);
         let (_, installer) = score_path_hit(
             r"C:\Downloads\WinSpot_0.1.2_x64-setup.exe",
             "WinSpot_0.1.2_x64-setup.exe",
@@ -791,29 +910,31 @@ mod tests {
             false,
             800,
         );
-        let (_, folder) = score_path_hit(
-            r"C:\Projects\winspot",
-            "winspot",
-            "winspot",
-            true,
-            1_000,
-        );
+        let (_, folder) = score_path_hit(r"C:\Projects\winspot", "winspot", "winspot", true, 1_000);
         assert!(portable > installer);
         assert!(portable > folder);
     }
 
     #[test]
     fn filters_windows_component_and_store_package_paths() {
-        assert!(is_search_noise(r"C:\Windows\WinSxS\amd64_notepad.resources"));
-        assert!(is_search_noise(r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_1.0"));
-        assert!(!is_search_noise(r"C:\Users\Lan\Documents\notepad-notes.txt"));
+        assert!(is_search_noise(
+            r"C:\Windows\WinSxS\amd64_notepad.resources"
+        ));
+        assert!(is_search_noise(
+            r"C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_1.0"
+        ));
+        assert!(!is_search_noise(
+            r"C:\Users\Lan\Documents\notepad-notes.txt"
+        ));
     }
 
     #[test]
     fn fulltext_accepts_documents_but_rejects_binaries() {
         assert!(is_fulltext_document(r"C:\Users\Lan\Documents\report.docx"));
         assert!(is_fulltext_document(r"C:\Users\Lan\code\main.rs"));
-        assert!(!is_fulltext_document(r"C:\Program Files\Internet Explorer\IEDIAGCMD.EXE"));
+        assert!(!is_fulltext_document(
+            r"C:\Program Files\Internet Explorer\IEDIAGCMD.EXE"
+        ));
         assert!(!is_fulltext_document(r"C:\Windows\System32\helper.dll"));
     }
 

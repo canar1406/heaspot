@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { SettingsView } from "./components/SettingsView";
+import { UninstallProgressView } from "./components/UninstallProgressView";
+import { UpdateProgressView } from "./components/UpdateProgressView";
 import { applyTheme } from "./theme";
 import "./styles/globals.css";
 
@@ -16,6 +18,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     {label === "settings" ? (
       <SettingsView onClose={() => void getCurrentWindow().hide()} />
+    ) : label === "uninstall-progress" ? (
+      <UninstallProgressView />
+    ) : label === "update-progress" ? (
+      <UpdateProgressView />
     ) : (
       <App />
     )}

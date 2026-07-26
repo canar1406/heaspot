@@ -238,6 +238,9 @@ export interface AppSettings {
   password_to_history: boolean;
   theme: string; // "system" | "light" | "dark"
   launch_at_startup: boolean;
+  auto_update: boolean;
+  update_endpoint: string;
+  update_pubkey: string;
 }
 
 export interface OtpPreview {

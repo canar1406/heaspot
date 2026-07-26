@@ -127,7 +127,11 @@ fn normalize(code: &str) -> String {
 
 /// Đổi `amount` từ tiền `from` sang `to` (mã ISO, hoặc GOLD/SILVER).
 #[tauri::command]
-pub async fn currency_convert(amount: f64, from: String, to: String) -> Result<CurrencyResult, String> {
+pub async fn currency_convert(
+    amount: f64,
+    from: String,
+    to: String,
+) -> Result<CurrencyResult, String> {
     let f = normalize(&from);
     let t = normalize(&to);
     let rates = tauri::async_runtime::spawn_blocking(get_rates)
