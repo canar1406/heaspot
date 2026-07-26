@@ -11,7 +11,7 @@
 - Launcher tự ẩn ổn định khi chuyển sang ứng dụng khác và `Esc` luôn đóng launcher ở lớp native; cơ chế generation/intent loại bỏ callback focus cũ làm cửa sổ xuất hiện lại, còn native dialog của HeaSpot không bị nhận nhầm là mất focus.
 - Gỡ cài đặt đối chiếu cả tên shortcut, nhóm Start Menu, vị trí cài và registry 32/64-bit; hỗ trợ tên lệch phiên bản như **7-Zip File Manager** ↔ **7-Zip 24.x (x64)**, MSI/UWP/portable và UAC. Tác vụ dài chạy nền trong cửa sổ tiến trình riêng nên launcher vẫn dùng bình thường; HeaSpot chặn tuyệt đối yêu cầu tự gỡ chính mình từ launcher.
 - Sau khi uninstaller kết thúc thành công, chế độ dọn sâu chỉ xóa dấu vết có quan hệ chắc chắn với ứng dụng và hiển thị riêng mục đã xóa, bỏ qua hoặc thất bại; không tuyên bố “đã sạch” khi file còn bị khóa hay thiếu quyền.
-- Auto-update dùng plugin updater chính thức của Tauri: tự kiểm tra sau khi khởi động, cửa sổ cập nhật riêng, release notes/thanh tải và bắt buộc chữ ký trước khi cài. Endpoint/public key cấu hình tại **Settings → Cập nhật**.
+- Auto-update dùng plugin updater chính thức của Tauri: tự kiểm tra sau khi khởi động, cửa sổ cập nhật riêng, release notes/thanh tải và bắt buộc chữ ký trước khi cài. Kênh release `canar1406/heaspot` và public key chính thức được cấu hình sẵn; có thể đổi tại **Settings → Cập nhật**.
 - Hỗ trợ Microsoft **OATH-TOTP**. Push `Approve sign-in`, number matching, passwordless và cặp URL HTTPS + activation code vẫn thuộc giao thức đăng ký riêng của Microsoft Authenticator, không phải secret OTP.
 - Search ưu tiên đúng **app/executable** hơn folder, installer và file trùng tên; app portable cũng được nhận diện và xếp hạng như ứng dụng.
 - Everything 1.4 được nhúng làm engine nền của HeaSpot, cấu hình không tray/không admin; app chỉ quản lý đúng tiến trình bundled của mình và không đụng instance Everything riêng của người dùng.
@@ -371,7 +371,7 @@ Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) build 
 
 1. Tạo cặp khóa bằng `npm run tauri signer generate -- -w ~/.tauri/heaspot.key`. Private key không được commit; `.gitignore` đã chặn `*.key`.
 2. Thêm private key và password vào GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY` và `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-3. Tại **Settings → Cập nhật**, nhập endpoint `https://github.com/canar1406/heaspot/releases/latest/download/latest.json` và public key tương ứng.
+3. Bản chính thức đã tích hợp endpoint `https://github.com/canar1406/heaspot/releases/latest/download/latest.json` và public key. **Settings → Cập nhật** chỉ cần dùng khi muốn đổi sang kênh phát hành/khóa khác.
 4. Tăng version rồi push tag `vX.Y.Z`. Tauri Action tạo installer, `.sig` và `latest.json`; ứng dụng chỉ cài khi chữ ký khớp.
 
 Không thể tắt xác minh chữ ký của updater. Build phát hành cần hai biến môi trường ký; build local kiểm thử có thể override `bundle.createUpdaterArtifacts=false` nhưng không tạo được gói auto-update.

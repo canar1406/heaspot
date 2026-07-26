@@ -2,6 +2,10 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+pub const DEFAULT_UPDATE_ENDPOINT: &str =
+    "https://github.com/canar1406/heaspot/releases/latest/download/latest.json";
+pub const DEFAULT_UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4RUM5QTg2RDg2OUZEMTcKUldRWC9XbllocHJzbUduc1VrT0pDUkFJQ2xGSXhXOXJiQTBmTHA1STBLM3ZvSy9uLzNVRGhxL2QK";
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     // Hotkey toàn cục để MỞ app
@@ -42,6 +46,15 @@ fn value(conn: &rusqlite::Connection, key: &str, default: &str) -> String {
     .unwrap_or_else(|_| default.to_string())
 }
 
+fn nonempty_value(conn: &rusqlite::Connection, key: &str, default: &str) -> String {
+    let stored = value(conn, key, default);
+    if stored.trim().is_empty() {
+        default.to_string()
+    } else {
+        stored
+    }
+}
+
 pub fn load(conn: &rusqlite::Connection) -> Settings {
     Settings {
         search_hotkey: value(conn, "search_hotkey", "Alt+Space"),
@@ -68,8 +81,8 @@ pub fn load(conn: &rusqlite::Connection) -> Settings {
         theme: value(conn, "theme", "system"),
         launch_at_startup: value(conn, "launch_at_startup", "false") == "true",
         auto_update: value(conn, "auto_update", "true") == "true",
-        update_endpoint: value(conn, "update_endpoint", ""),
-        update_pubkey: value(conn, "update_pubkey", ""),
+        update_endpoint: nonempty_value(conn, "update_endpoint", DEFAULT_UPDATE_ENDPOINT),
+        update_pubkey: nonempty_value(conn, "update_pubkey", DEFAULT_UPDATE_PUBKEY),
     }
 }
 
@@ -177,7 +190,7 @@ fn set_startup(enabled: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_update_config;
+    use super::{load, validate_update_config, DEFAULT_UPDATE_ENDPOINT, DEFAULT_UPDATE_PUBKEY};
 
     #[test]
     fn updater_requires_https_and_a_complete_key_pair() {
@@ -188,5 +201,28 @@ mod tests {
         assert!(validate_update_config(true, "http://example.test/latest.json", "key").is_err());
         assert!(validate_update_config(true, "https://example.test/latest.json", "").is_err());
         assert!(validate_update_config(true, "", "public-key").is_err());
+    }
+
+    #[test]
+    fn updater_uses_official_channel_for_missing_or_legacy_blank_settings() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+
+        let defaults = load(&conn);
+        assert_eq!(defaults.update_endpoint, DEFAULT_UPDATE_ENDPOINT);
+        assert_eq!(defaults.update_pubkey, DEFAULT_UPDATE_PUBKEY);
+
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('update_endpoint', ''), ('update_pubkey', '')",
+            [],
+        )
+        .unwrap();
+        let migrated = load(&conn);
+        assert_eq!(migrated.update_endpoint, DEFAULT_UPDATE_ENDPOINT);
+        assert_eq!(migrated.update_pubkey, DEFAULT_UPDATE_PUBKEY);
     }
 }

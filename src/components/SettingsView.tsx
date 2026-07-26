@@ -20,8 +20,8 @@ const DEFAULTS: AppSettings = {
   theme: "system",
   launch_at_startup: false,
   auto_update: true,
-  update_endpoint: "",
-  update_pubkey: "",
+  update_endpoint: "https://github.com/canar1406/heaspot/releases/latest/download/latest.json",
+  update_pubkey: "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4RUM5QTg2RDg2OUZEMTcKUldRWC9XbllocHJzbUduc1VrT0pDUkFJQ2xGSXhXOXJiQTBmTHA1STBLM3ZvSy9uLzNVRGhxL2QK",
 };
 
 type Tab = "general" | "keywords" | "clipboard" | "updates";
