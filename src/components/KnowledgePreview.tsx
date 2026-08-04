@@ -62,7 +62,7 @@ export function KnowledgePreview({ item, onPaste, onCopy, onOpen, onSave, onTran
                      text-[13px] leading-relaxed select-text text-zinc-800 dark:text-zinc-100"
         />
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 text-[13px] leading-relaxed select-text text-zinc-700 dark:text-zinc-200 whitespace-pre-wrap">
+        <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto break-words [overflow-wrap:anywhere] px-4 py-3 text-[13px] leading-relaxed select-text text-zinc-700 dark:text-zinc-200 whitespace-pre-wrap">
           {item.preview}
         </div>
       )}

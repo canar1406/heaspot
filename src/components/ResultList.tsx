@@ -23,7 +23,7 @@ export function ResultList({ items, selectedIndex, onExecute, onHover }: Props) 
   return (
     <div
       ref={listRef}
-      className="max-h-[404px] overflow-y-auto py-2 border-t border-black/5 dark:border-white/10"
+      className="max-h-[404px] overflow-x-hidden overflow-y-auto py-2 border-t border-black/5 dark:border-white/10"
     >
       {items.map((item, i) => (
         <ResultItem

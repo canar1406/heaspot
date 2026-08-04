@@ -91,6 +91,8 @@ pub struct OtpBackupResult {
 pub struct OtpQuickAddResult {
     pub account: OtpAccountView,
     pub created: bool,
+    pub replaced: bool,
+    pub removed_duplicates: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -604,60 +606,19 @@ pub fn add_otp_account(
     name: String,
     note: String,
     input: String,
-) -> Result<OtpAccountView, String> {
-    let mut config = parse_otp_input(&input)?;
-    let final_name = if name.trim().is_empty() {
-        if !config.account_name.trim().is_empty() {
-            config.account_name.trim().to_string()
-        } else if !config.issuer.trim().is_empty() {
-            config.issuer.trim().to_string()
-        } else {
-            "Tài khoản 2FA".into()
-        }
-    } else {
-        name.trim().to_string()
-    };
-    let secret_enc = unsafe { dpapi_encrypt(&config.secret)? };
-    config.secret.fill(0);
-    let conn = state.db.lock().map_err(|error| error.to_string())?;
-    conn.execute(
-        "INSERT INTO otp_accounts(name,note,issuer,secret_enc,otp_type,algorithm,digits,period,counter)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-        params![
-            final_name,
-            note.trim(),
-            config.issuer,
-            secret_enc,
-            config.otp_type,
-            config.algorithm,
-            config.digits as i64,
-            config.period as i64,
-            config.counter as i64,
-        ],
-    )
-    .map_err(|error| error.to_string())?;
-    let account = load_account(&conn, conn.last_insert_rowid())?;
-    account_view(account, unix_now())
-}
-
-#[tauri::command]
-pub fn quick_add_otp_account(
-    state: State<'_, crate::AppState>,
-    input: String,
 ) -> Result<OtpQuickAddResult, String> {
     let conn = state.db.lock().map_err(|error| error.to_string())?;
-    quick_add_otp_account_with_conn(&conn, input)
+    add_otp_account_with_conn(&conn, name, note, input, true)
 }
 
-fn quick_add_otp_account_with_conn(
+fn find_accounts_with_secret(
     conn: &rusqlite::Connection,
-    input: String,
-) -> Result<OtpQuickAddResult, String> {
-    let mut config = parse_otp_input(input.trim().trim_start_matches('+').trim())?;
+    secret: &[u8],
+) -> Result<Vec<StoredAccount>, String> {
     let mut statement = conn
         .prepare(
             "SELECT id,name,note,issuer,secret_enc,otp_type,algorithm,digits,period,counter,is_pinned,is_archived,created_at,updated_at
-             FROM otp_accounts ORDER BY id",
+             FROM otp_accounts ORDER BY is_archived ASC,created_at ASC,id ASC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -680,48 +641,115 @@ fn quick_add_otp_account_with_conn(
             })
         })
         .map_err(|error| error.to_string())?;
-    let mut duplicate = None;
+    let mut matches = Vec::new();
     for row in rows {
         let account = row.map_err(|error| error.to_string())?;
         let mut existing = unsafe { dpapi_decrypt(&account.secret_enc)? };
-        let matches = existing == config.secret && account.otp_type == config.otp_type;
+        let is_match = existing.as_slice() == secret;
         existing.fill(0);
-        if matches {
-            duplicate = Some(account);
-            break;
+        if is_match {
+            matches.push(account);
         }
     }
-    drop(statement);
-    if let Some(mut account) = duplicate {
-        if account.archived {
-            conn.execute(
-                "UPDATE otp_accounts SET is_archived=0,updated_at=datetime('now','localtime') WHERE id=?1",
-                params![account.id],
-            )
-            .map_err(|error| error.to_string())?;
-            account.archived = false;
+    Ok(matches)
+}
+
+fn add_otp_account_with_conn(
+    conn: &rusqlite::Connection,
+    name: String,
+    note: String,
+    input: String,
+    replace_existing: bool,
+) -> Result<OtpQuickAddResult, String> {
+    let mut config = parse_otp_input(&input)?;
+    let replacement_name = (!name.trim().is_empty()).then(|| name.trim().to_string());
+    let replacement_note = (!note.trim().is_empty()).then(|| note.trim().to_string());
+    let final_name = if name.trim().is_empty() {
+        if !config.account_name.trim().is_empty() {
+            config.account_name.trim().to_string()
+        } else if !config.issuer.trim().is_empty() {
+            config.issuer.trim().to_string()
+        } else {
+            "Tài khoản 2FA".into()
         }
+    } else {
+        name.trim().to_string()
+    };
+    let duplicates = find_accounts_with_secret(conn, &config.secret)?;
+    if let Some(account) = duplicates.first() {
+        let target_id = account.id;
+        let removed_duplicates = duplicates.len().saturating_sub(1);
+        let secret_enc = replace_existing
+            .then(|| unsafe { dpapi_encrypt(&config.secret) })
+            .transpose()?;
         config.secret.fill(0);
+        let transaction = conn
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        for duplicate in duplicates.iter().skip(1) {
+            transaction
+                .execute(
+                    "UPDATE otp_history SET account_id=?1 WHERE account_id=?2",
+                    params![target_id, duplicate.id],
+                )
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "DELETE FROM otp_accounts WHERE id=?1",
+                    params![duplicate.id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if replace_existing {
+            transaction
+                .execute(
+                    "UPDATE otp_accounts
+                     SET name=COALESCE(?1,name),note=COALESCE(?2,note),issuer=?3,secret_enc=?4,otp_type=?5,algorithm=?6,digits=?7,period=?8,counter=?9,
+                         is_archived=0,created_at=strftime('%Y-%m-%d %H:%M:%f','now','localtime'),
+                         updated_at=strftime('%Y-%m-%d %H:%M:%f','now','localtime')
+                     WHERE id=?10",
+                    params![
+                        replacement_name,
+                        replacement_note,
+                        config.issuer,
+                        secret_enc.expect("secret đã được mã hóa khi thay bản cũ"),
+                        config.otp_type,
+                        config.algorithm,
+                        config.digits as i64,
+                        config.period as i64,
+                        config.counter as i64,
+                        target_id,
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        } else {
+            transaction
+                .execute(
+                    "UPDATE otp_accounts
+                     SET is_archived=0,created_at=strftime('%Y-%m-%d %H:%M:%f','now','localtime'),
+                         updated_at=strftime('%Y-%m-%d %H:%M:%f','now','localtime')
+                     WHERE id=?1",
+                    params![target_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+        let account = load_account(conn, target_id)?;
         return Ok(OtpQuickAddResult {
             account: account_view(account, unix_now())?,
             created: false,
+            replaced: replace_existing,
+            removed_duplicates,
         });
     }
-
-    let final_name = if !config.account_name.trim().is_empty() {
-        config.account_name.trim().to_string()
-    } else if !config.issuer.trim().is_empty() {
-        config.issuer.trim().to_string()
-    } else {
-        "Tài khoản 2FA".into()
-    };
     let secret_enc = unsafe { dpapi_encrypt(&config.secret)? };
     config.secret.fill(0);
     conn.execute(
         "INSERT INTO otp_accounts(name,note,issuer,secret_enc,otp_type,algorithm,digits,period,counter)
-         VALUES(?1,'Thêm nhanh bằng otp +',?2,?3,?4,?5,?6,?7,?8)",
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             final_name,
+            note.trim(),
             config.issuer,
             secret_enc,
             config.otp_type,
@@ -736,7 +764,31 @@ fn quick_add_otp_account_with_conn(
     Ok(OtpQuickAddResult {
         account: account_view(account, unix_now())?,
         created: true,
+        replaced: false,
+        removed_duplicates: 0,
     })
+}
+
+#[tauri::command]
+pub fn quick_add_otp_account(
+    state: State<'_, crate::AppState>,
+    input: String,
+) -> Result<OtpQuickAddResult, String> {
+    let conn = state.db.lock().map_err(|error| error.to_string())?;
+    quick_add_otp_account_with_conn(&conn, input)
+}
+
+fn quick_add_otp_account_with_conn(
+    conn: &rusqlite::Connection,
+    input: String,
+) -> Result<OtpQuickAddResult, String> {
+    add_otp_account_with_conn(
+        conn,
+        String::new(),
+        "Thêm nhanh bằng otp +".into(),
+        input.trim().trim_start_matches('+').trim().to_string(),
+        false,
+    )
 }
 
 #[tauri::command]
@@ -1190,25 +1242,17 @@ fn import_otp_backup_with_conn(
     }
 
     let mut existing_statement = conn
-        .prepare("SELECT id,name,issuer,secret_enc,otp_type FROM otp_accounts ORDER BY id")
+        .prepare("SELECT id,secret_enc FROM otp_accounts ORDER BY id")
         .map_err(|error| error.to_string())?;
     let rows = existing_statement
         .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
-                row.get::<_, String>(4)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
         })
         .map_err(|error| error.to_string())?;
     let mut existing = Vec::new();
     for row in rows {
-        let (id, name, issuer, encrypted, otp_type) = row.map_err(|error| error.to_string())?;
-        existing.push((id, name, issuer, otp_type, unsafe {
-            dpapi_decrypt(&encrypted)?
-        }));
+        let (id, encrypted) = row.map_err(|error| error.to_string())?;
+        existing.push((id, unsafe { dpapi_decrypt(&encrypted)? }));
     }
     drop(existing_statement);
 
@@ -1232,14 +1276,9 @@ fn import_otp_backup_with_conn(
             secret.fill(0);
             return Err("Secret trong backup quá ngắn".into());
         }
-        if let Some((id, ..)) = existing
+        if let Some((id, _)) = existing
             .iter()
-            .find(|(_, name, issuer, otp_type, current)| {
-                name == &account.name
-                    && issuer == &account.issuer
-                    && otp_type == &account.otp_type
-                    && current.as_slice() == secret.as_slice()
-            })
+            .find(|(_, current)| current.as_slice() == secret.as_slice())
         {
             id_map.insert(account.backup_id, (*id, false));
             secret.fill(0);
@@ -1269,13 +1308,7 @@ fn import_otp_backup_with_conn(
             )
             .map_err(|error| error.to_string())?;
         let new_id = transaction.last_insert_rowid();
-        existing.push((
-            new_id,
-            account.name,
-            account.issuer,
-            account.otp_type,
-            secret,
-        ));
+        existing.push((new_id, secret));
         id_map.insert(account.backup_id, (new_id, true));
         imported_accounts += 1;
     }
@@ -1311,7 +1344,7 @@ fn import_otp_backup_with_conn(
         imported_history += 1;
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    for (_, _, _, _, secret) in &mut existing {
+    for (_, secret) in &mut existing {
         secret.fill(0);
     }
 
@@ -1326,8 +1359,8 @@ fn import_otp_backup_with_conn(
 #[cfg(test)]
 mod tests {
     use super::{
-        account_secret, code_for, dpapi_decrypt, dpapi_encrypt, encode_base32,
-        export_otp_backup_with_conn, generate_code, import_otp_backup_with_conn,
+        account_secret, add_otp_account_with_conn, code_for, dpapi_decrypt, dpapi_encrypt,
+        encode_base32, export_otp_backup_with_conn, generate_code, import_otp_backup_with_conn,
         list_otp_accounts_with_conn, parse_otp_input, quick_add_otp_account_with_conn,
     };
     use rusqlite::params;
@@ -1403,10 +1436,22 @@ mod tests {
              );",
         )
         .unwrap();
-        let first = quick_add_otp_account_with_conn(&conn, format!("+ {RFC_SECRET}")).unwrap();
-        let second = quick_add_otp_account_with_conn(&conn, RFC_SECRET.into()).unwrap();
+        let first = add_otp_account_with_conn(
+            &conn,
+            "Tài khoản đầu".into(),
+            String::new(),
+            RFC_SECRET.into(),
+            true,
+        )
+        .unwrap();
+        let second = quick_add_otp_account_with_conn(
+            &conn,
+            "otpauth://hotp/Ten-khac?secret=GEZD%20GNBV%20GY3T%20QOJQ%20GEZD%20GNBV%20GY3T%20QOJQ&counter=9".into(),
+        )
+        .unwrap();
         assert!(first.created);
         assert!(!second.created);
+        assert!(!second.replaced);
         assert_eq!(first.account.id, second.account.id);
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM otp_accounts", [], |row| row
@@ -1414,6 +1459,105 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn regular_add_preserves_blank_metadata_when_replacing_duplicate() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE otp_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',
+                issuer TEXT NOT NULL DEFAULT '',secret_enc BLOB NOT NULL,otp_type TEXT NOT NULL DEFAULT 'totp',
+                algorithm TEXT NOT NULL DEFAULT 'SHA1',digits INTEGER NOT NULL DEFAULT 6,period INTEGER NOT NULL DEFAULT 30,
+                counter INTEGER NOT NULL DEFAULT 0,is_pinned INTEGER NOT NULL DEFAULT 0,is_archived INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+             );",
+        )
+        .unwrap();
+        let first = add_otp_account_with_conn(
+            &conn,
+            "Bản gốc".into(),
+            "Ghi chú cũ".into(),
+            RFC_SECRET.into(),
+            true,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE otp_accounts SET is_archived=1 WHERE id=?1",
+            params![first.account.id],
+        )
+        .unwrap();
+        let duplicate = add_otp_account_with_conn(
+            &conn,
+            String::new(),
+            String::new(),
+            "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ".into(),
+            true,
+        )
+        .unwrap();
+        assert!(!duplicate.created);
+        assert!(duplicate.replaced);
+        assert_eq!(duplicate.account.id, first.account.id);
+        assert!(!duplicate.account.archived);
+        assert_eq!(duplicate.account.name, "Bản gốc");
+        assert_eq!(duplicate.account.note, "Ghi chú cũ");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM otp_accounts", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        let renamed = add_otp_account_with_conn(
+            &conn,
+            "Tên mới".into(),
+            String::new(),
+            RFC_SECRET.into(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(renamed.account.name, "Tên mới");
+        assert_eq!(renamed.account.note, "Ghi chú cũ");
+    }
+
+    #[test]
+    fn replacing_a_duplicate_moves_it_above_newer_accounts() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE otp_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',
+                issuer TEXT NOT NULL DEFAULT '',secret_enc BLOB NOT NULL,otp_type TEXT NOT NULL DEFAULT 'totp',
+                algorithm TEXT NOT NULL DEFAULT 'SHA1',digits INTEGER NOT NULL DEFAULT 6,period INTEGER NOT NULL DEFAULT 30,
+                counter INTEGER NOT NULL DEFAULT 0,is_pinned INTEGER NOT NULL DEFAULT 0,is_archived INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+             );",
+        )
+        .unwrap();
+        let original =
+            add_otp_account_with_conn(&conn, "Cũ".into(), String::new(), RFC_SECRET.into(), true)
+                .unwrap();
+        add_otp_account_with_conn(
+            &conn,
+            "Tài khoản khác".into(),
+            String::new(),
+            "JBSWY3DPEHPK3PXP".into(),
+            true,
+        )
+        .unwrap();
+        let replaced = add_otp_account_with_conn(
+            &conn,
+            "Bản mới".into(),
+            String::new(),
+            RFC_SECRET.into(),
+            true,
+        )
+        .unwrap();
+        let accounts = list_otp_accounts_with_conn(&conn, false).unwrap();
+        assert_eq!(replaced.account.id, original.account.id);
+        assert_eq!(accounts[0].id, original.account.id);
+        assert_eq!(accounts[0].name, "Bản mới");
     }
 
     #[test]

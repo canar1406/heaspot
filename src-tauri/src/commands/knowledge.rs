@@ -36,6 +36,20 @@ const UA: &str = "HeaSpot/0.1 desktop launcher";
 
 const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+/// Reuse DNS, TLS and keep-alive connections between successive `g` queries.
+/// Creating a fresh default agent for every keystroke makes the final query
+/// wait behind repeated handshakes and is noticeably slower on Windows.
+fn serper_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(3))
+            .timeout_read(Duration::from_secs(6))
+            .timeout_write(Duration::from_secs(3))
+            .build()
+    })
+}
+
 /// GET một URL trả JSON (native, không qua PowerShell -> nhanh hơn nhiều)
 fn http_json(url: &str) -> Option<serde_json::Value> {
     let body = ureq::get(url)
@@ -72,15 +86,603 @@ fn html_to_text(s: &str) -> String {
         .join(" ")
 }
 
+fn json_string(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn direct_question_subject(query: &str) -> Option<String> {
+    let q = query
+        .trim()
+        .trim_matches(|c: char| matches!(c, '?' | '!' | '.' | ','))
+        .trim();
+    let lower = q.to_lowercase();
+
+    for suffix in [
+        " nghĩa là gì",
+        " là cái gì",
+        " là người nào",
+        " là ở đâu",
+        " là gì",
+        " là ai",
+        " ở đâu",
+    ] {
+        if lower.ends_with(suffix) {
+            let subject_len = q.len().saturating_sub(suffix.len());
+            let subject = q[..subject_len].trim();
+            return (!subject.is_empty()).then(|| subject.to_string());
+        }
+    }
+
+    for prefix in ["what is ", "who is ", "where is ", "define "] {
+        if lower.starts_with(prefix) {
+            let subject = q[prefix.len()..].trim();
+            return (!subject.is_empty()).then(|| subject.to_string());
+        }
+    }
+    None
+}
+
+fn plain_keyword_subject(query: &str) -> Option<String> {
+    if direct_question_subject(query).is_some() {
+        return None;
+    }
+    let subject = query
+        .trim()
+        .trim_matches(|c: char| matches!(c, '?' | '!' | '.' | ','))
+        .trim();
+    let word_count = subject.split_whitespace().count();
+    (!subject.is_empty() && subject.chars().count() <= 80 && word_count <= 6)
+        .then(|| subject.to_string())
+}
+
+fn fold_vietnamese_for_match(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c.to_lowercase().next().unwrap_or(c) {
+            'à' | 'á' | 'ạ' | 'ả' | 'ã' | 'â' | 'ầ' | 'ấ' | 'ậ' | 'ẩ' | 'ẫ' | 'ă' | 'ằ' | 'ắ'
+            | 'ặ' | 'ẳ' | 'ẵ' => 'a',
+            'è' | 'é' | 'ẹ' | 'ẻ' | 'ẽ' | 'ê' | 'ề' | 'ế' | 'ệ' | 'ể' | 'ễ' => {
+                'e'
+            }
+            'ì' | 'í' | 'ị' | 'ỉ' | 'ĩ' => 'i',
+            'ò' | 'ó' | 'ọ' | 'ỏ' | 'õ' | 'ô' | 'ồ' | 'ố' | 'ộ' | 'ổ' | 'ỗ' | 'ơ' | 'ờ' | 'ớ'
+            | 'ợ' | 'ở' | 'ỡ' => 'o',
+            'ù' | 'ú' | 'ụ' | 'ủ' | 'ũ' | 'ư' | 'ừ' | 'ứ' | 'ự' | 'ử' | 'ữ' => {
+                'u'
+            }
+            'ỳ' | 'ý' | 'ỵ' | 'ỷ' | 'ỹ' => 'y',
+            'đ' => 'd',
+            other if other.is_alphanumeric() => other,
+            _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Các fact thuộc chính hệ sinh thái Heavietnam được trả ngay, không phụ thuộc
+/// chất lượng snippet hay kết nối Google. Chỉ kích hoạt cho câu hỏi chức danh rõ ràng.
+fn local_heavietnam_answer(query: &str) -> Option<QuickAnswer> {
+    let folded = fold_vietnamese_for_match(query);
+    let asks_person = folded
+        .split_whitespace()
+        .any(|token| token == "ai" || token == "who");
+    let mentions_heavietnam = folded.split_whitespace().any(|token| token == "heavietnam");
+    let asks_role = folded
+        .split_whitespace()
+        .any(|token| token == "admin" || token == "founder")
+        || folded.contains("nguoi sang lap")
+        || folded.contains("chu heavietnam");
+    if !asks_person || !mentions_heavietnam || !asks_role {
+        return None;
+    }
+
+    Some(QuickAnswer {
+        answer: "Admin và founder của Heavietnam là Võ Nguyễn Hoàng Long.".to_string(),
+        source: "Tri thức nội bộ Heavietnam".to_string(),
+        url: "https://heavietnam.com".to_string(),
+        related: vec!["HeaSpot thuộc hệ sinh thái Heavietnam.".to_string()],
+        ..QuickAnswer::default()
+    })
+}
+
+fn subject_appears_in(candidate: &str, subject: &str) -> bool {
+    candidate.to_lowercase().contains(&subject.to_lowercase())
+}
+
+fn normalized_token(token: &str) -> String {
+    token
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
+    for (i, a_char) in a.chars().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, b_char) in b_chars.iter().enumerate() {
+            current.push(
+                (current[j] + 1)
+                    .min(previous[j + 1] + 1)
+                    .min(previous[j] + usize::from(a_char != *b_char)),
+            );
+        }
+        previous = current;
+    }
+    previous[b_chars.len()]
+}
+
+/// Chỉ sửa typo rất nhỏ ở tên đủ dài; số model phải khớp tuyệt đối.
+/// Nhờ vậy `cucktech 25` khớp `Cuktech 25`, nhưng không đổi một tên ngắn
+/// hay model khác thành thực thể không liên quan.
+fn token_matches(candidate: &str, subject: &str) -> bool {
+    let candidate = normalized_token(candidate);
+    let subject = normalized_token(subject);
+    if candidate.is_empty() || subject.is_empty() {
+        return false;
+    }
+    if candidate == subject {
+        return true;
+    }
+    if candidate.chars().all(|c| c.is_ascii_digit()) || subject.chars().all(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    candidate.chars().count() >= 5
+        && subject.chars().count() >= 5
+        && levenshtein(&candidate, &subject) <= 1
+}
+
+fn fuzzy_subject_appears_in(candidate: &str, subject: &str) -> bool {
+    let candidate_tokens: Vec<&str> = candidate.split_whitespace().collect();
+    let subject_tokens: Vec<&str> = subject.split_whitespace().collect();
+    !subject_tokens.is_empty()
+        && subject_tokens.iter().all(|subject_token| {
+            candidate_tokens
+                .iter()
+                .any(|candidate_token| token_matches(candidate_token, subject_token))
+        })
+        && subject_tokens
+            .iter()
+            .any(|token| normalized_token(token).chars().any(|c| c.is_alphabetic()))
+}
+
+fn canonical_subject(candidate: &str, subject: &str) -> Option<String> {
+    let candidate_tokens: Vec<&str> = candidate.split_whitespace().collect();
+    let subject_tokens: Vec<&str> = subject.split_whitespace().collect();
+    if subject_tokens.is_empty() || candidate_tokens.len() < subject_tokens.len() {
+        return None;
+    }
+    candidate_tokens
+        .windows(subject_tokens.len())
+        .find(|window| {
+            window
+                .iter()
+                .zip(&subject_tokens)
+                .all(|(candidate_token, subject_token)| {
+                    token_matches(candidate_token, subject_token)
+                })
+        })
+        .map(|window| {
+            window
+                .iter()
+                .map(|token| {
+                    token.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|name| !name.is_empty())
+}
+
+fn corrected_query_from_serper(value: &serde_json::Value) -> String {
+    [
+        value.pointer("/spellingCorrection/correctedQuery"),
+        value.pointer("/searchInformation/correctedQuery"),
+        value.get("correctedQuery"),
+        value.get("spellingCorrection"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|entry| entry.as_str())
+    .map(html_to_text)
+    .unwrap_or_default()
+}
+
+fn ai_overview_text(value: &serde_json::Value) -> String {
+    let Some(overview) = value.get("aiOverview") else {
+        return String::new();
+    };
+    if let Some(text) = overview.as_str() {
+        return html_to_text(text);
+    }
+    for key in ["answer", "text", "snippet"] {
+        let text = html_to_text(&json_string(overview, key));
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    for collection in ["blocks", "items"] {
+        if let Some(items) = overview.get(collection).and_then(|item| item.as_array()) {
+            for item in items {
+                for key in ["answer", "text", "snippet"] {
+                    let text = html_to_text(&json_string(item, key));
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn inferred_entity_answer(
+    query: &str,
+    corrected_query: &str,
+    references: &[KnowledgeHit],
+) -> Option<(String, String, String, String)> {
+    let requested_subject = direct_question_subject(query)?;
+    let corrected_subject = direct_question_subject(corrected_query)
+        .or_else(|| (!corrected_query.is_empty()).then(|| corrected_query.to_string()))
+        .unwrap_or_else(|| requested_subject.clone());
+
+    let relevant: Vec<&KnowledgeHit> = references
+        .iter()
+        .filter(|reference| {
+            let haystack = format!("{} {}", reference.title, reference.extract);
+            fuzzy_subject_appears_in(&haystack, &corrected_subject)
+                || fuzzy_subject_appears_in(&haystack, &requested_subject)
+        })
+        .collect();
+    if relevant.len() < 2 {
+        return None;
+    }
+
+    let display_name = relevant
+        .iter()
+        .find_map(|reference| canonical_subject(&reference.title, &corrected_subject))
+        .or_else(|| {
+            relevant
+                .iter()
+                .find_map(|reference| canonical_subject(&reference.extract, &corrected_subject))
+        })
+        .unwrap_or(corrected_subject);
+
+    // Các alias cùng một hàng quy về một nhãn. Chỉ dùng khi >= 2 nguồn phù hợp
+    // nhắc đến cùng loại thực thể để không biến một snippet lạc đề thành "đáp án".
+    const ENTITY_TYPES: &[(&str, &[&str])] = &[
+        (
+            "pin sạc dự phòng",
+            &[
+                "pin sạc dự phòng",
+                "sạc dự phòng",
+                "pin dự phòng",
+                "viên pin",
+            ],
+        ),
+        (
+            "tai nghe không dây",
+            &["tai nghe không dây", "tai nghe bluetooth"],
+        ),
+        (
+            "điện thoại thông minh",
+            &["điện thoại thông minh", "smartphone"],
+        ),
+        ("máy tính xách tay", &["máy tính xách tay", "laptop"]),
+        ("máy tính bảng", &["máy tính bảng", "tablet"]),
+        ("đồng hồ thông minh", &["đồng hồ thông minh", "smartwatch"]),
+        (
+            "ngôn ngữ lập trình",
+            &["ngôn ngữ lập trình", "programming language"],
+        ),
+        ("trình duyệt web", &["trình duyệt web", "web browser"]),
+        ("ứng dụng", &["ứng dụng", "application", " app "]),
+        ("trò chơi", &["trò chơi", "video game"]),
+        ("website", &["website", "trang web"]),
+        ("thương hiệu", &["thương hiệu", "brand"]),
+        ("công ty", &["công ty", "company"]),
+        ("tổ chức", &["tổ chức", "organization"]),
+    ];
+
+    let entity_type = ENTITY_TYPES.iter().find_map(|(label, aliases)| {
+        let count = relevant
+            .iter()
+            .filter(|reference| {
+                let text = format!(" {} {} ", reference.title, reference.extract).to_lowercase();
+                aliases.iter().any(|alias| text.contains(alias))
+            })
+            .count();
+        (count >= 2).then_some(*label)
+    })?;
+
+    let answer = format!("{display_name} là một {entity_type}.");
+    let source = format!("Tổng hợp từ {} kết quả Google phù hợp", relevant.len());
+    let inferred_query = query.replacen(&requested_subject, &display_name, 1);
+    let effective_query = if corrected_query.is_empty() {
+        inferred_query
+    } else {
+        corrected_query.to_string()
+    };
+    Some((answer, source, relevant[0].url.clone(), effective_query))
+}
+
+fn title_case_name_at_end(sentence: &str) -> Option<String> {
+    let mut name_parts = Vec::new();
+    for token in sentence.split_whitespace().rev().take(5) {
+        let cleaned = token.trim_matches(|c: char| !c.is_alphabetic() && c != '-' && c != '_');
+        let starts_uppercase = cleaned.chars().next().is_some_and(char::is_uppercase);
+        if cleaned.is_empty() || !starts_uppercase {
+            break;
+        }
+        name_parts.push(cleaned);
+    }
+    if name_parts.len() < 2 {
+        return None;
+    }
+    name_parts.reverse();
+    Some(name_parts.join(" "))
+}
+
+/// Bắt quan hệ chức danh nằm ở câu kế tiếp tên người, ví dụ snippet:
+/// `... Võ Nguyễn Hoàng Long. Founder và Admin.`
+fn extract_role_answer(
+    query: &str,
+    references: &[KnowledgeHit],
+) -> Option<(String, String, String)> {
+    let folded_query = fold_vietnamese_for_match(query);
+    let role = if folded_query
+        .split_whitespace()
+        .any(|token| token == "admin")
+    {
+        "Admin"
+    } else if folded_query
+        .split_whitespace()
+        .any(|token| token == "founder")
+        || folded_query.contains("nguoi sang lap")
+    {
+        "Founder"
+    } else {
+        return None;
+    };
+    let organization = direct_question_subject(query)?
+        .split_whitespace()
+        .filter(|token| {
+            let folded = fold_vietnamese_for_match(token);
+            folded != "admin"
+                && folded != "founder"
+                && folded != "cua"
+                && folded != "nguoi"
+                && folded != "sang"
+                && folded != "lap"
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if organization.is_empty() {
+        return None;
+    }
+
+    for reference in references {
+        let combined = format!("{}. {}", reference.title, reference.extract);
+        let folded_combined = fold_vietnamese_for_match(&combined);
+        if !folded_combined.contains(&fold_vietnamese_for_match(&organization))
+            || !folded_combined.contains(&role.to_lowercase())
+        {
+            continue;
+        }
+        let sentences: Vec<&str> = combined.split(['.', '!', '?']).collect();
+        for (index, sentence) in sentences.iter().enumerate() {
+            let folded_sentence = fold_vietnamese_for_match(sentence);
+            if !(folded_sentence.contains("admin") || folded_sentence.contains("founder")) {
+                continue;
+            }
+            if let Some(name) = index
+                .checked_sub(1)
+                .and_then(|previous| title_case_name_at_end(sentences[previous]))
+            {
+                return Some((
+                    format!("{role} của {organization} là {name}."),
+                    reference.title.clone(),
+                    reference.url.clone(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn extract_direct_sentence(query: &str, snippet: &str) -> Option<String> {
+    let subject = direct_question_subject(query)
+        .or_else(|| plain_keyword_subject(query))?
+        .to_lowercase();
+    let cleaned = html_to_text(snippet);
+
+    for sentence in cleaned.split_inclusive(['.', '!', '?']) {
+        let candidate = sentence
+            .trim()
+            .trim_start_matches(['-', '–', '—', '•'])
+            .trim();
+        let lower = candidate.to_lowercase();
+        let is_definition = lower.contains(" là ")
+            || lower.contains(" viết tắt của ")
+            || lower.contains(" is ")
+            || lower.contains(" stands for ");
+        if candidate.chars().count() >= 12 && subject_appears_in(&lower, &subject) && is_definition
+        {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn parse_serper_response(query: &str, value: &serde_json::Value) -> QuickAnswer {
+    let corrected_query = corrected_query_from_serper(value);
+    let mut references = Vec::new();
+    if let Some(organic) = value.get("organic").and_then(|x| x.as_array()) {
+        for result in organic.iter().take(5) {
+            let extract = html_to_text(&json_string(result, "snippet"));
+            if extract.is_empty() {
+                continue;
+            }
+            references.push(KnowledgeHit {
+                title: html_to_text(&json_string(result, "title")),
+                extract,
+                url: json_string(result, "link"),
+            });
+        }
+    }
+
+    let ai_answer = ai_overview_text(value);
+    if !ai_answer.is_empty() {
+        return QuickAnswer {
+            answer: ai_answer,
+            source: "Google AI Overview".to_string(),
+            url: references
+                .first()
+                .map(|r| r.url.clone())
+                .unwrap_or_default(),
+            corrected_query,
+            references,
+            ..QuickAnswer::default()
+        };
+    }
+
+    if let Some(answer_box) = value.get("answerBox") {
+        let answer = ["answer", "snippet"]
+            .iter()
+            .map(|key| html_to_text(&json_string(answer_box, key)))
+            .find(|answer| !answer.is_empty())
+            .unwrap_or_default();
+        if !answer.is_empty() {
+            let title = html_to_text(&json_string(answer_box, "title"));
+            let answer_url = json_string(answer_box, "link");
+            return QuickAnswer {
+                answer,
+                source: if title.is_empty() {
+                    "Google Answer Box".to_string()
+                } else {
+                    title
+                },
+                url: if answer_url.is_empty() {
+                    references
+                        .first()
+                        .map(|r| r.url.clone())
+                        .unwrap_or_default()
+                } else {
+                    answer_url
+                },
+                related: Vec::new(),
+                corrected_query,
+                references,
+            };
+        }
+    }
+
+    if let Some(graph) = value.get("knowledgeGraph") {
+        let description = html_to_text(&json_string(graph, "description"));
+        if !description.is_empty() {
+            let title = html_to_text(&json_string(graph, "title"));
+            let answer = if title.is_empty() {
+                description
+            } else {
+                format!("{title}: {description}")
+            };
+            return QuickAnswer {
+                answer,
+                source: if title.is_empty() {
+                    "Google Knowledge Graph".to_string()
+                } else {
+                    title
+                },
+                url: json_string(graph, "website"),
+                related: Vec::new(),
+                corrected_query,
+                references,
+            };
+        }
+    }
+
+    for reference in &references {
+        if let Some(answer) = extract_direct_sentence(query, &reference.extract) {
+            return QuickAnswer {
+                answer,
+                source: reference.title.clone(),
+                url: reference.url.clone(),
+                related: Vec::new(),
+                corrected_query,
+                references,
+            };
+        }
+    }
+
+    if let Some((answer, source, url)) = extract_role_answer(query, &references) {
+        return QuickAnswer {
+            answer,
+            source,
+            url,
+            corrected_query,
+            references,
+            ..QuickAnswer::default()
+        };
+    }
+
+    if let Some((answer, source, url, corrected_query)) =
+        inferred_entity_answer(query, &corrected_query, &references)
+    {
+        return QuickAnswer {
+            answer,
+            source,
+            url,
+            corrected_query,
+            references,
+            ..QuickAnswer::default()
+        };
+    }
+
+    // Với một từ khóa/tên thực thể, một snippet tốt nhất là phần giới thiệu,
+    // không phải "đáp án" tổng hợp. Chỉ lấy một nguồn, tuyệt đối không ghép nhiều mẩu.
+    if plain_keyword_subject(query).is_some() {
+        if let Some(reference) = references.first() {
+            return QuickAnswer {
+                answer: reference.extract.clone(),
+                source: reference.title.clone(),
+                url: reference.url.clone(),
+                related: Vec::new(),
+                corrected_query,
+                references,
+            };
+        }
+    }
+
+    QuickAnswer {
+        source: "Google (Serper)".to_string(),
+        url: references
+            .first()
+            .map(|r| r.url.clone())
+            .unwrap_or_default(),
+        references,
+        corrected_query,
+        ..QuickAnswer::default()
+    }
+}
+
 /// Serper.dev — Google SERP API (đăng ký free 2500 lượt, KHÔNG cần thẻ).
-/// Trả kết quả Google thật: answerBox + knowledgeGraph + organic snippets -> phủ MỌI truy vấn.
+/// Chỉ trả câu trả lời trực tiếp; organic snippets được giữ riêng làm nguồn tham khảo.
 fn serper_search(query: &str, key: &str) -> QuickAnswer {
     let body_json = serde_json::json!({ "q": query, "gl": "vn", "hl": "vi", "num": 5 });
-    let resp = match ureq::post("https://google.serper.dev/search")
+    let resp = match serper_agent()
+        .post("https://google.serper.dev/search")
         .set("X-API-KEY", key)
         .set("Content-Type", "application/json")
         .set("User-Agent", BROWSER_UA)
-        .timeout(Duration::from_secs(8))
         .send_json(body_json)
     {
         Ok(r) => r.into_string().unwrap_or_default(),
@@ -90,55 +692,7 @@ fn serper_search(query: &str, key: &str) -> QuickAnswer {
         return QuickAnswer::default();
     };
 
-    let mut parts: Vec<String> = Vec::new();
-    let mut first_url = String::new();
-    let s = |val: &serde_json::Value, k: &str| {
-        val.get(k)
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-
-    // 1. Answer box (giống ô trả lời nhanh của Google)
-    if let Some(ab) = v.get("answerBox") {
-        let a = s(ab, "answer");
-        let sn = s(ab, "snippet");
-        let best = if !a.is_empty() { a } else { sn };
-        if !best.is_empty() {
-            parts.push(html_to_text(&best));
-        }
-    }
-    // 2. Knowledge graph (thực thể: sản phẩm, người, nơi chốn…)
-    if let Some(kg) = v.get("knowledgeGraph") {
-        let desc = s(kg, "description");
-        let title = s(kg, "title");
-        if !desc.is_empty() {
-            parts.push(html_to_text(&format!("{title}: {desc}")));
-        }
-    }
-    // 3. Vài kết quả organic đầu (snippet trang web thật)
-    if let Some(org) = v.get("organic").and_then(|x| x.as_array()) {
-        for r in org.iter().take(4) {
-            if first_url.is_empty() {
-                first_url = s(r, "link");
-            }
-            let title = s(r, "title");
-            let sn = s(r, "snippet");
-            if !sn.is_empty() {
-                parts.push(html_to_text(&format!("• {title}: {sn}")));
-            }
-            if parts.len() >= 5 {
-                break;
-            }
-        }
-    }
-
-    QuickAnswer {
-        answer: parts.join("\n\n"),
-        source: "Google (Serper)".to_string(),
-        url: first_url,
-        related: Vec::new(),
-    }
+    parse_serper_response(query, &v)
 }
 
 /// Google Translate (endpoint gtx). Trả JSON thô của translate_a/single.
@@ -422,6 +976,8 @@ pub struct QuickAnswer {
     pub source: String,
     pub url: String,
     pub related: Vec<String>,
+    pub references: Vec<KnowledgeHit>,
+    pub corrected_query: String,
 }
 
 /// Kết quả nhanh cho `g`. Có Serper key -> phủ MỌI truy vấn (kết quả Google thật);
@@ -434,6 +990,9 @@ pub async fn quick_answer(
     let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(QuickAnswer::default());
+    }
+    if let Some(answer) = local_heavietnam_answer(&q) {
+        return Ok(answer);
     }
     let key = q.to_lowercase();
     if let Some(hit) = quick_answer_cache()
@@ -454,19 +1013,21 @@ pub async fn quick_answer(
         .filter(|k| !k.trim().is_empty())
     };
     let ans = tauri::async_runtime::spawn_blocking(move || {
+        let mut serper_fallback = QuickAnswer::default();
         // Ưu tiên Serper/Google (phủ hết) nếu có key
         if let Some(key) = serper_key {
             let b = serper_search(&q, &key);
             if !b.answer.trim().is_empty() {
                 return b;
             }
+            serper_fallback = b;
         }
         let url = format!(
             "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
             urlencoding(&q)
         );
         let Some(v) = http_json(&url) else {
-            return QuickAnswer::default();
+            return serper_fallback;
         };
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
         // Ưu tiên: Answer > AbstractText > Definition
@@ -500,11 +1061,17 @@ pub async fn quick_answer(
             }
         }
 
+        if answer.trim().is_empty() {
+            return serper_fallback;
+        }
+
         QuickAnswer {
             answer,
             source,
             url,
             related,
+            references: serper_fallback.references,
+            corrected_query: serper_fallback.corrected_query,
         }
     })
     .await
@@ -773,4 +1340,235 @@ fn do_translate(q: &str) -> Result<TranslationHit, String> {
         antonyms,
         entries,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serper_answer_box_is_the_direct_answer() {
+        let value = serde_json::json!({
+            "answerBox": {
+                "title": "Example",
+                "answer": "42",
+                "link": "https://example.com/answer"
+            },
+            "organic": [{
+                "title": "Unrelated result",
+                "snippet": "This must remain a reference, not part of the answer.",
+                "link": "https://example.com/result"
+            }]
+        });
+
+        let result = parse_serper_response("the answer", &value);
+        assert_eq!(result.answer, "42");
+        assert_eq!(result.source, "Example");
+        assert_eq!(result.references.len(), 1);
+        assert!(!result.answer.contains("Unrelated result"));
+    }
+
+    #[test]
+    fn serper_knowledge_graph_is_the_direct_answer() {
+        let value = serde_json::json!({
+            "knowledgeGraph": {
+                "title": "Rust",
+                "description": "A programming language.",
+                "website": "https://www.rust-lang.org"
+            }
+        });
+
+        let result = parse_serper_response("Rust là gì", &value);
+        assert_eq!(result.answer, "Rust: A programming language.");
+        assert_eq!(result.url, "https://www.rust-lang.org");
+    }
+
+    #[test]
+    fn definition_question_extracts_one_direct_sentence_from_organic_result() {
+        let value = serde_json::json!({
+            "organic": [
+                {
+                    "title": "Installing Guide - Heavietnam",
+                    "snippet": "Các hướng dẫn được tổng hợp từ nhiều nguồn có uy tín.",
+                    "link": "https://heavietnam.example/install"
+                },
+                {
+                    "title": "Welcome to Heavietnam",
+                    "snippet": "Lịch sử. Heavietnam là viết tắt của Hackintosh Enthusiasts Association Viet Nam. Hội những người đam mê Hackintosh Việt Nam.",
+                    "link": "https://heavietnam.example/about"
+                }
+            ]
+        });
+
+        let result = parse_serper_response("heavietnam là gì", &value);
+        assert_eq!(
+            result.answer,
+            "Heavietnam là viết tắt của Hackintosh Enthusiasts Association Viet Nam."
+        );
+        assert_eq!(result.source, "Welcome to Heavietnam");
+        assert_eq!(result.references.len(), 2);
+        assert!(!result.answer.contains("Installing Guide"));
+    }
+
+    #[test]
+    fn unrelated_organic_results_are_not_presented_as_an_answer() {
+        let value = serde_json::json!({
+            "organic": [{
+                "title": "A search result",
+                "snippet": "This page mentions several unrelated topics without defining the query.",
+                "link": "https://example.com"
+            }]
+        });
+
+        let result = parse_serper_response("heavietnam là gì", &value);
+        assert!(result.answer.is_empty());
+        assert_eq!(result.references.len(), 1);
+    }
+
+    #[test]
+    fn short_entity_keyword_gets_a_definition_without_la_gi_suffix() {
+        let value = serde_json::json!({
+            "organic": [{
+                "title": "Heavn",
+                "snippet": "Heavn is a dating app for Christian singles seeking a serious relationship.",
+                "link": "https://heavn.example/about"
+            }]
+        });
+
+        let result = parse_serper_response("heavn", &value);
+        assert_eq!(
+            result.answer,
+            "Heavn is a dating app for Christian singles seeking a serious relationship."
+        );
+        assert_eq!(result.source, "Heavn");
+    }
+
+    #[test]
+    fn generic_keyword_uses_only_the_best_intro_snippet() {
+        let value = serde_json::json!({
+            "organic": [
+                {
+                    "title": "Primary result",
+                    "snippet": "A concise introduction to the requested topic.",
+                    "link": "https://example.com/primary"
+                },
+                {
+                    "title": "Secondary result",
+                    "snippet": "This second result must remain only a reference.",
+                    "link": "https://example.com/secondary"
+                }
+            ]
+        });
+
+        let result = parse_serper_response("topic", &value);
+        assert_eq!(
+            result.answer,
+            "A concise introduction to the requested topic."
+        );
+        assert!(!result.answer.contains("second result"));
+        assert_eq!(result.references.len(), 2);
+    }
+
+    #[test]
+    fn tiny_brand_typo_with_matching_model_gets_consensus_product_answer() {
+        let value = serde_json::json!({
+            "organic": [
+                {
+                    "title": "Đây là viên pin Cuktech 25 SE sau 2 tháng sử dụng",
+                    "snippet": "Đánh giá viên pin Cuktech 25 SE và thời lượng sử dụng thực tế.",
+                    "link": "https://example.com/review"
+                },
+                {
+                    "title": "Mua Pin Sạc Dự Phòng Cuktech 25 chính hãng",
+                    "snippet": "Pin sạc dự phòng Cuktech 25 có dung lượng lớn.",
+                    "link": "https://example.com/store"
+                },
+                {
+                    "title": "CUKTECH Việt Nam",
+                    "snippet": "Nhà phân phối sản phẩm CUKTECH chính hãng.",
+                    "link": "https://example.com/official"
+                }
+            ]
+        });
+
+        let result = parse_serper_response("cucktech 25 là gì", &value);
+        assert_eq!(result.answer, "Cuktech 25 là một pin sạc dự phòng.");
+        assert!(result.source.contains("2 kết quả Google"));
+        assert_eq!(result.corrected_query, "Cuktech 25 là gì");
+    }
+
+    #[test]
+    fn fuzzy_matching_never_changes_the_numeric_model() {
+        assert!(fuzzy_subject_appears_in(
+            "Cuktech 25 power bank",
+            "cucktech 25"
+        ));
+        assert!(!fuzzy_subject_appears_in(
+            "Cuktech 20 power bank",
+            "cucktech 25"
+        ));
+    }
+
+    #[test]
+    fn serper_spelling_correction_is_exposed_to_the_ui() {
+        let value = serde_json::json!({
+            "spellingCorrection": { "correctedQuery": "cuktech 25 là gì" },
+            "organic": []
+        });
+        let result = parse_serper_response("cucktech 25 là gì", &value);
+        assert_eq!(result.corrected_query, "cuktech 25 là gì");
+    }
+
+    #[test]
+    fn one_source_is_not_enough_for_a_synthesized_definition() {
+        let value = serde_json::json!({
+            "organic": [{
+                "title": "Cuktech 25",
+                "snippet": "Một bài đăng gọi đây là pin sạc dự phòng.",
+                "link": "https://example.com/only"
+            }]
+        });
+        let result = parse_serper_response("cucktech 25 là gì", &value);
+        assert!(result.answer.is_empty());
+    }
+
+    #[test]
+    fn heavietnam_admin_is_an_instant_local_fact() {
+        for query in [
+            "admin heavietnam là ai",
+            "admin cua heavietnam la ai",
+            "who is founder heavietnam",
+            "người sáng lập heavietnam là ai",
+        ] {
+            let result = local_heavietnam_answer(query).expect(query);
+            assert_eq!(
+                result.answer,
+                "Admin và founder của Heavietnam là Võ Nguyễn Hoàng Long."
+            );
+            assert_eq!(result.source, "Tri thức nội bộ Heavietnam");
+        }
+    }
+
+    #[test]
+    fn role_parser_reads_a_name_from_the_sentence_before_founder_and_admin() {
+        let value = serde_json::json!({
+            "organic": [{
+                "title": "Welcome to Heavietnam",
+                "snippet": "Heavietnam là một trang web về Hackintosh được tạo ra vào ngày 16/06. Võ Nguyễn Hoàng Long. Founder và Admin.",
+                "link": "https://heavietnam.com/about"
+            }]
+        });
+        let result = parse_serper_response("admin heavietnam là ai", &value);
+        assert_eq!(
+            result.answer,
+            "Admin của heavietnam là Võ Nguyễn Hoàng Long."
+        );
+        assert_eq!(result.source, "Welcome to Heavietnam");
+    }
+
+    #[test]
+    fn local_fact_does_not_hijack_unrelated_admin_queries() {
+        assert!(local_heavietnam_answer("admin github là ai").is_none());
+        assert!(local_heavietnam_answer("mở admin heavietnam").is_none());
+    }
 }

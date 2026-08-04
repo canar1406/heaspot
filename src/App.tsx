@@ -163,6 +163,10 @@ export default function App() {
       const payload = typeof e.payload === "string" ? { mode: e.payload } : e.payload;
       const nextMode = payload.mode === "clipboard" ? "clipboard" : "search";
       const prefill = payload.prefill ?? "";
+      // Backend always establishes a fresh native size before this event.
+      // Invalidate the React-side cache or a previous 520px preview can make
+      // the next preview skip resizing while the native window is only 72px.
+      lastSize.current = { w: 0, h: 0 };
       setUninstallPrompt(undefined);
       setMode(nextMode);
       setQuery(prefill);
@@ -192,6 +196,7 @@ export default function App() {
   // Khi ẩn: reset về trạng thái gọn nhất để lần mở sau không bị "nhảy" layout
   useEffect(() => {
     const unlisten = listen("winspot://hidden", () => {
+      lastSize.current = { w: 0, h: 0 };
       setUninstallPrompt(undefined);
       setMode("search");
       setQuery("");
@@ -258,7 +263,7 @@ export default function App() {
     // con trỏ -> hover lại -> vòng lặp giật "đùng đùng". Menu context vẫn đúng vì
     // index cố định tại thời điểm ctxOpen bật.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleResults.length, mode, showKnowledge, detailTrigger, otpActive, ctxOpen, uninstallPrompt]);
+  }, [visibleResults.length, mode, showKnowledge, detailTrigger, otpActive, ctxOpen, uninstallPrompt, showTick]);
 
   const hide = () => {
     setUninstallPrompt(undefined);
@@ -762,7 +767,7 @@ export default function App() {
       ref={panelRef}
       initial={false}
       animate={controls}
-      className={`relative flex flex-col rounded-2xl overflow-hidden
+      className={`relative flex w-full min-w-0 max-w-full flex-col rounded-2xl overflow-hidden
                  bg-white/95 dark:bg-zinc-900/95
                  border border-black/10 dark:border-white/10
                  ${mode !== "search" || otpActive || ctxOpen || uninstallPrompt ? "h-screen" : ""}`}

@@ -2,8 +2,9 @@
 
 **HeaSpot** — launcher kiểu **Spotlight (macOS) / Alfred** cho Windows, xây bằng **Tauri (Rust + React)**. Siêu nhẹ (~10 MB RAM khi ẩn), keyboard-first, mở tức thì.
 
-### Mới trong v0.1.15
+### Mới trong v0.1.16
 
+- **Ổn định launcher qua nhiều lần đóng/mở**: hủy resize cũ khi ẩn, đồng bộ lại kích thước native/frontend khi hiện và chặn nội dung preview dài tạo thanh cuộn ngang hoặc làm cửa sổ kẹt ở chiều cao thanh tìm kiếm.
 - **Kho xác thực 2FA/OTP cục bộ**: TOTP/HOTP, SHA-1/SHA-256/SHA-512, 6–8 chữ số, chu kỳ tùy URI; nhận secret Base32 có dấu cách và URI `otpauth://` của Google/Microsoft/OATH.
 - Gõ `otp` để quản lý; gõ **`otp + <secret>` rồi Enter** để thêm nhanh, lưu tài khoản, sinh và copy OTP ngay. Secret trùng không tạo bản sao.
 - Mỗi tài khoản có tên gợi nhớ, chú thích, ngày thêm/cập nhật, ghim, lưu trữ và lịch sử những OTP đã bấm Copy. Danh sách luôn xếp mục mới thêm lên đầu; secret có thể hiện/ẩn hoặc copy lại theo từng tài khoản.
@@ -137,9 +138,17 @@ Máy tính nhận biểu thức sau `=` (hằng số, lượng giác, lũy thừ
 
 ## Kết quả nhanh Google (`g`)
 
-Gõ `g <từ khoá>`: HeaSpot lấy **kết quả nhanh của Google** (answer box / knowledge graph / snippet) và hiển thị ngay ở **khung preview bên phải**; bên trái có thêm dòng **"Tìm chi tiết với Google"** để mở trang tìm kiếm đầy đủ. Ưu tiên tốc độ: kết quả nhanh hiện trước, chi tiết bổ sung sau.
+Gõ `g <từ khoá>`: HeaSpot ưu tiên **câu trả lời trực tiếp** từ Google AI Overview (khi API trả về), Answer Box hoặc Knowledge Graph và hiển thị ngay ở **khung preview bên phải**; bên trái có thêm dòng **"Tìm chi tiết với Google"** để mở trang tìm kiếm đầy đủ. Với câu hỏi như `g heavietnam là gì`, app trích đúng câu định nghĩa từ nguồn phù hợp. Với một tên/từ khoá đơn như `g heavn`, `g rust` hoặc `g tauri`, app hiển thị một đoạn giới thiệu tốt nhất rồi đặt các kết quả còn lại dưới mục **Nguồn tham khảo**.
+
+Tên riêng sai nhẹ được hiệu chỉnh có kiểm soát: ví dụ `g cucktech 25 là gì` có thể nhận ra `Cuktech 25`, nhưng số model vẫn phải khớp tuyệt đối. Khi không có Answer Box, app chỉ tạo câu giới thiệu loại sản phẩm/thực thể nếu ít nhất hai kết quả phù hợp cùng xác nhận; tên đã hiệu chỉnh được hiện rõ thay vì âm thầm thay truy vấn. Một nguồn đơn lẻ hoặc dữ liệu mâu thuẫn vẫn chỉ hiện nguồn tham khảo để tránh đoán sai.
+
+Các fact cốt lõi thuộc chính hệ sinh thái được ưu tiên từ tri thức nội bộ để không phụ thuộc snippet: `g admin heavietnam là ai`, `g founder heavietnam là ai` hoặc `g người sáng lập heavietnam là ai` trả ngay **Võ Nguyễn Hoàng Long**. Parser web cũng nhận diện cấu trúc chức danh tách câu như `Võ Nguyễn Hoàng Long. Founder và Admin.` thay vì bỏ sót tên đã có trong nguồn.
+
+HeaSpot không còn ghép nhiều organic snippet thành một "câu trả lời". Nội dung copy chỉ gồm câu trả lời/đoạn giới thiệu chính; nếu dữ liệu không đủ rõ cho một câu hỏi, app nói rõ chưa có câu trả lời trực tiếp và chỉ đưa nguồn để người dùng kiểm tra, thay vì suy đoán.
 
 Nguồn dữ liệu dùng **Serper.dev** (gói miễn phí 2.500 lượt, không cần thẻ). Dán API key vào **Settings → Chung → Kết quả nhanh Google (g)** rồi Lưu; nếu để trống, HeaSpot tự lùi về DuckDuckGo Instant Answer. API key chỉ lưu cục bộ trong SQLite, không gửi đi đâu khác.
+
+Backend giữ một HTTP agent dùng chung để tái sử dụng DNS/TLS/keep-alive giữa các truy vấn và cache exact-query trong RAM. Tối ưu này không giảm dữ liệu: mỗi lượt Serper vẫn yêu cầu đủ 5 kết quả và giữ thứ tự AI Overview → Answer Box → Knowledge Graph → câu định nghĩa → tổng hợp đa nguồn có kiểm chứng → nguồn tham khảo.
 
 ![Kết quả nhanh Google](docs/screenshots/google-quick.png)
 
@@ -178,7 +187,7 @@ Ví dụ thao tác nhanh:
 otp + JBSW Y3DP EHPK 3PXP
 ```
 
-Nhấn `Enter`: HeaSpot kiểm tra secret, tìm tài khoản đã tồn tại, tạo mới nếu cần, lưu secret, sinh mã hiện tại và copy mã để dán ngay. Nếu tài khoản trùng đang nằm trong Lưu trữ, nó được khôi phục về Đang dùng thay vì tạo bản thứ hai. Chuỗi sau keyword `otp` được chặn ngay tại router và không bao giờ đi tiếp sang Google/web search hoặc provider tìm kiếm khác.
+Nhấn `Enter`: HeaSpot kiểm tra secret, tìm tài khoản đã tồn tại, tạo mới nếu cần, lưu secret, sinh mã hiện tại và copy mã để dán ngay. Bộ lọc trùng được dùng chung cho **thêm thường, `otp +` và import backup**: secret được decode về cùng byte gốc nên chữ hoa/thường, dấu cách, Base32 thuần hay URI `otpauth://` khác cách trình bày vẫn được nhận là một tài khoản; tên, issuer hoặc loại TOTP/HOTP khác cũng không tạo thêm bản có cùng secret. Khi thêm thường một secret đã có, tài khoản được đưa lên đầu và mọi bản trùng dư được gộp/xóa; ID chính được giữ để bảo toàn history. Tên hoặc ghi chú mới chỉ thay trường cũ khi người dùng thực sự nhập nội dung — ô trống luôn giữ metadata cũ. Với `otp +`, app giữ toàn bộ metadata cũ nhưng vẫn đưa tài khoản lên đầu. Nếu bản trùng đang nằm trong Lưu trữ, nó được khôi phục về Đang dùng. Chuỗi sau keyword `otp` được chặn ngay tại router và không bao giờ đi tiếp sang Google/web search hoặc provider tìm kiếm khác.
 
 Khi thêm bằng form, có thể đặt **tên gợi nhớ** và **chú thích** như email, công ty/phòng ban hay mục đích sử dụng. Mỗi thẻ hiển thị provider, TOTP/HOTP, thuật toán, mã sống, vòng đếm thời gian, ngày thêm và ngày cập nhật. Tài khoản mới thêm luôn đứng đầu danh sách; trạng thái ghim vẫn được lưu và hiển thị. Có thể hiện/ẩn và copy lại secret key của riêng từng tài khoản, đổi tên/chú thích, ghim, lưu trữ/khôi phục hoặc xóa bằng xác nhận hai bước.
 
@@ -200,7 +209,7 @@ HeaSpot thay thế được phần **OATH-TOTP** khi trang Microsoft cho chọn 
 |---|---|
 | Secret Base32 hoặc URI `otpauth://totp/...` | Hỗ trợ |
 | Mã OTP 6 số đang chạy | Dùng để đăng nhập, **không** dùng để nhập tài khoản vì không suy ngược được secret |
-| QR chuẩn OATH | Dùng được sau khi lấy secret/URI; v0.1.15 chưa đọc trực tiếp ảnh QR |
+| QR chuẩn OATH | Dùng được sau khi lấy secret/URI; v0.1.16 chưa đọc trực tiếp ảnh QR |
 | URL `https://...` + activation code từ **Can't scan image** | Không hỗ trợ; đây là đăng ký thiết bị/push riêng, không phải secret TOTP |
 | `Approve sign-in?`, number matching, passwordless | Vẫn cần Microsoft Authenticator |
 
@@ -355,14 +364,14 @@ Yêu cầu: Node.js, Rust (MSVC), VS Build Tools (C++), WebView2.
 npm run tauri build
 ```
 
-Bộ cài NSIS ở `src-tauri/target/release/bundle/nsis/HeaSpot_*_x64-setup.exe`; bản hiện tại là `HeaSpot_0.1.15_x64-setup.exe`.
+Bộ cài NSIS ở `src-tauri/target/release/bundle/nsis/HeaSpot_*_x64-setup.exe`; bản hiện tại là `HeaSpot_0.1.16_x64-setup.exe`.
 
 > Khi build lại trên máy đang chạy HeaSpot, hãy thoát HeaSpot để giải phóng executable/sidecar trong thư mục `target`. Không cần tắt hay gỡ bản Everything riêng của người dùng; tài nguyên đóng gói nằm ở `src-tauri/resources/heaspot-everything/`.
 
 ## CI — tự động release
 
 `.github/workflows/release.yml`:
-- Đẩy tag `v*` (VD `git tag v0.1.15 && git push --tags`) → tạo **release chính thức** kèm bộ cài.
+- Đẩy tag `v*` (VD `git tag v0.1.16 && git push --tags`) → tạo **release chính thức** kèm bộ cài.
 - Có thể chạy thủ công bằng `workflow_dispatch`; push thường lên `main` không tự phát hành để tránh đưa build chưa gắn version vào kênh stable.
 
 ### Auto-update có chữ ký

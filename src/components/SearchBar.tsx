@@ -35,7 +35,7 @@ export const SearchBar = forwardRef<HTMLInputElement, Props>(
               ? "Lọc clipboard history…"
               : "Tìm app, file… (g web · in nội-dung · = tính · conv đổi · tr dịch)"
           }
-          className="flex-1 bg-transparent outline-none border-none text-[20px]
+          className="min-w-0 flex-1 bg-transparent outline-none border-none text-[20px]
                      text-zinc-900 dark:text-zinc-50
                      placeholder-zinc-400 dark:placeholder-zinc-500"
         />

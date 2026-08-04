@@ -552,11 +552,19 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
         { id: "g:loading", title: `Đang lấy kết quả nhanh cho "${gArg}"…`, kind: "knowledge", action: "google", text: "", preview: `Đang tra nhanh “${gArg}”…` },
         detailItem,
       ]);
-      const mkAnswer = (answer: string, source: string, url: string): ResultItemData => ({
-        id: "g:answer", title: `Kết quả nhanh: ${gArg}`,
+      const isDirectQuestion = /\?|\b(là gì|là ai|là ở đâu|ở đâu|nghĩa là gì)\s*$/i.test(gArg)
+        || /^(what is|who is|where is|define)\b/i.test(gArg);
+      const mkAnswer = (answer: string, source: string, url: string, preview = answer, correctedQuery = ""): ResultItemData => ({
+        id: "g:answer", title: correctedQuery
+          ? `Có thể bạn muốn hỏi: ${correctedQuery}`
+          : `${isDirectQuestion ? "Trả lời" : "Giới thiệu"}: ${gArg}`,
         subtitle: `Nguồn: ${source} · Enter để copy`,
-        kind: "knowledge", action: "google", text: answer, preview: answer, url,
+        kind: "knowledge", action: "google", text: answer, preview, url,
       });
+      const referenceText = (references: KnowledgeHit[] = []) => references
+        .slice(0, 4)
+        .map((reference) => `• ${reference.title || reference.url}: ${reference.extract}`)
+        .join("\n\n");
       const emptyItem: ResultItemData = {
         id: "g:answer", title: `Không có kết quả nhanh cho "${gArg}"`,
         subtitle: "Thêm Serper.dev API key trong Settings để phủ hết · hoặc mở Google",
@@ -569,16 +577,36 @@ export function useSearch(query: string, refreshKey: number, kw: KwMap = DEFAULT
           .then((qa) => {
             if (seq.current !== mySeq) return;
             if (qa.answer.trim()) {
-              let answer = qa.answer;
-              if (qa.related?.length) answer += `\n\nLiên quan:\n• ${qa.related.join("\n• ")}`;
-              setResults([mkAnswer(answer, qa.source || "Web", qa.url || ""), detailItem]);
+              let preview = qa.answer;
+              if (qa.corrected_query?.trim() && qa.corrected_query.toLowerCase() !== gArg.toLowerCase()) {
+                preview = `Đã hiệu chỉnh truy vấn: “${qa.corrected_query}”\n\n${preview}`;
+              }
+              if (qa.related?.length) preview += `\n\nThông tin liên quan:\n• ${qa.related.join("\n• ")}`;
+              const references = referenceText(qa.references);
+              if (references) preview += `\n\nNguồn tham khảo:\n${references}`;
+              setResults([mkAnswer(qa.answer, qa.source || "Web", qa.url || "", preview, qa.corrected_query), detailItem]);
               return;
             }
             // Serper/DDG rỗng -> fallback Wikipedia
             invoke<KnowledgeHit[]>("wikipedia_search", { query: gArg })
               .then((wiki) => {
                 if (seq.current !== mySeq) return;
-                setResults([wiki.length ? mkAnswer(wiki[0].extract, "Wikipedia", wiki[0].url) : emptyItem, detailItem]);
+                if (wiki.length) {
+                  setResults([mkAnswer(wiki[0].extract, "Wikipedia", wiki[0].url), detailItem]);
+                  return;
+                }
+                const references = referenceText(qa.references);
+                const noDirectAnswer: ResultItemData = references ? {
+                  id: "g:answer",
+                  title: `Chưa có câu trả lời trực tiếp cho "${gArg}"`,
+                  subtitle: "Dữ liệu tìm kiếm chưa đủ rõ · chọn nguồn để kiểm tra thêm",
+                  kind: "knowledge",
+                  action: "google",
+                  text: "",
+                  preview: `Chưa đủ dữ liệu đáng tin cậy để trả lời trực tiếp câu hỏi này.\n\nNguồn tham khảo:\n${references}`,
+                  url: qa.url || "",
+                } : emptyItem;
+                setResults([noDirectAnswer, detailItem]);
               })
               .catch(() => { if (seq.current === mySeq) setResults([emptyItem, detailItem]); });
           })

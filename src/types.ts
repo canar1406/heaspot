@@ -154,6 +154,8 @@ export interface QuickAnswer {
   source: string;
   url: string;
   related: string[];
+  references: KnowledgeHit[];
+  corrected_query: string;
 }
 
 export interface CurrencyResult {

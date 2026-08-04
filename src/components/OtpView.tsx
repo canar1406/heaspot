@@ -24,6 +24,8 @@ interface Props {
 interface QuickAddResult {
   account: OtpAccount;
   created: boolean;
+  replaced: boolean;
+  removed_duplicates: number;
 }
 
 function displayCode(code: string) {
@@ -159,7 +161,10 @@ export function OtpView({
       .then(async (result) => {
         const current = await invoke<OtpPreview>("copy_otp_code", { id: result.account.id });
         setCopiedId(result.account.id);
-        setQuickMessage(`${result.created ? "Đã lưu" : "Đã có sẵn"} · OTP ${displayCode(current.code)} đã được copy.`);
+        const merged = result.removed_duplicates
+          ? ` · đã gộp ${result.removed_duplicates} bản trùng`
+          : "";
+        setQuickMessage(`${result.created ? "Đã lưu" : "Đã có sẵn, đã đưa lên đầu"}${merged} · OTP ${displayCode(current.code)} đã được copy.`);
         setSecret("");
         setName("");
         setNote("");
@@ -211,7 +216,13 @@ export function OtpView({
     setBusy(true);
     setError("");
     try {
-      await invoke("add_otp_account", { name, note, input: secret });
+      const result = await invoke<QuickAddResult>("add_otp_account", { name, note, input: secret });
+      const merged = result.removed_duplicates
+        ? ` và gộp ${result.removed_duplicates} bản trùng dư`
+        : "";
+      setQuickMessage(result.created
+        ? `Đã lưu “${result.account.name}”.`
+        : `Đã thay bản cũ bằng “${result.account.name}”, đưa lên đầu${merged}.`);
       setSecret("");
       setName("");
       setNote("");
@@ -413,7 +424,7 @@ export function OtpView({
       </div>
 
       {quickMessage && (
-        <div className={`mx-4 mb-2 rounded-lg px-3 py-1.5 text-[11px] ${quickMessage.includes("đã được copy") ? "bg-emerald-500/10 text-emerald-500" : "bg-blue-500/10 text-blue-500"}`}>
+        <div className={`mx-4 mb-2 rounded-lg px-3 py-1.5 text-[11px] ${quickMessage.includes("đã được copy") || quickMessage.startsWith("Đã lưu") || quickMessage.includes("không tạo bản trùng") ? "bg-emerald-500/10 text-emerald-500" : "bg-blue-500/10 text-blue-500"}`}>
           {quickMessage}
         </div>
       )}

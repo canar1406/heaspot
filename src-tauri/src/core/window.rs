@@ -10,6 +10,10 @@ static VISIBILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MAIN_VISIBLE_INTENT: AtomicBool = AtomicBool::new(false);
 static MAIN_FOCUS_ACQUIRED: AtomicBool = AtomicBool::new(false);
 
+fn cancel_resize_requests() {
+    RESIZE_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
 fn visibility_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -282,6 +286,9 @@ pub fn hide_main(app: &AppHandle) {
     // Cancel first: an already queued frontend animation/fallback is then
     // unable to show the window again after Escape or a real focus loss.
     cancel_show_requests();
+    // A resize animation may still be running on another thread. Letting it
+    // continue after hide can overwrite the compact size chosen on next show.
+    cancel_resize_requests();
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
@@ -420,6 +427,7 @@ pub fn toggle_with(app: &AppHandle, mode: &str, prefill: &str) {
         }
         // Đặt sẵn kích thước ĐÚNG trước khi hiện để không thấy cửa sổ "nhảy"
         if !visible {
+            cancel_resize_requests();
             let (w, h) = if mode == "clipboard" {
                 (CLIPBOARD_WIDTH, CLIPBOARD_HEIGHT)
             } else {
